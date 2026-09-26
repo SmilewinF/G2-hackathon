@@ -1,34 +1,113 @@
 {
-  "_comment": "Labelled probe submissions. None of these are in corpus.json or off_topic_anchors.json.",
-
+  "_comment": "Labelled probe submissions. None of these are in corpus.json or off_topic_anchors.json. off_topic_adjacent: same-town comments about other civic subjects (the adjacent-topic leak the evaluation panel found); written fresh, not in the evaluation set or the relevance negatives.",
   "novel_relevant": [
-    {"id": "n_flood", "stance": "support", "headline": "Design the park to soak up Elm Street floods",
-     "body": "Elm Street floods every spring because the garage and surrounding pavement shed all the rainwater into overloaded storm drains. If the park is built with bioswales, rain gardens and an underground retention basin, it could protect downtown basements and cut sewer overflows into the river."},
-    {"id": "n_carbon", "stance": "mixed", "headline": "Keep the garage's frame and build the park on top",
-     "body": "Demolishing a concrete garage throws away thousands of tons of embodied carbon. Strip the structure back to its frame, keep the lower deck for accessible and delivery parking, and plant a terraced elevated park on the upper levels. It would likely cost less than full demolition too."},
-    {"id": "n_depot", "stance": "support", "headline": "The garage sits on Riverton's original rail depot",
-     "body": "Before the garage was built in 1971, this block was the 1880s rail depot that the whole town grew up around. The redesign should expose the old platform foundations and add a small heritage walk so the park tells the story of how downtown Riverton began."}
+    {
+      "id": "n_flood",
+      "stance": "support",
+      "headline": "Design the park to soak up Elm Street floods",
+      "body": "Elm Street floods every spring because the garage and surrounding pavement shed all the rainwater into overloaded storm drains. If the park is built with bioswales, rain gardens and an underground retention basin, it could protect downtown basements and cut sewer overflows into the river."
+    },
+    {
+      "id": "n_carbon",
+      "stance": "mixed",
+      "headline": "Keep the garage's frame and build the park on top",
+      "body": "Demolishing a concrete garage throws away thousands of tons of embodied carbon. Strip the structure back to its frame, keep the lower deck for accessible and delivery parking, and plant a terraced elevated park on the upper levels. It would likely cost less than full demolition too."
+    },
+    {
+      "id": "n_depot",
+      "stance": "support",
+      "headline": "The garage sits on Riverton's original rail depot",
+      "body": "Before the garage was built in 1971, this block was the 1880s rail depot that the whole town grew up around. The redesign should expose the old platform foundations and add a small heritage walk so the park tells the story of how downtown Riverton began."
+    }
   ],
-
   "duplicates": [
-    {"id": "d_copy", "stance": "oppose", "headline": "No parking = no customers",
-     "body": "I run a shoe repair shop on Main Street. Most of my customers drive in, drop off and leave. Take away those 600 spaces and they will just go to the mall where parking is free and easy!"},
-    {"id": "d_paraphrase_parking", "stance": "oppose", "headline": "Shops can't survive without parking",
-     "body": "If shoppers cannot find a parking space near the stores they will stop coming downtown and go to the suburban malls instead. Removing the garage will hurt every business on Main Street."},
-    {"id": "d_paraphrase_family", "stance": "support", "headline": "Wonderful for local families",
-     "body": "As a mom I love this. Downtown kids need a green place to play, run around and have picnics with friends. This park should have happened years ago."},
-    {"id": "d_paraphrase_heat", "stance": "support", "headline": "Shade trees will beat the summer heat",
-     "body": "Downtown is scorching in summer because of all the concrete. Replacing the garage with a park full of shade trees will cool the area during heat waves."},
-    {"id": "d_stance_flip", "stance": "undecided", "headline": "Finally somewhere for kids to play",
-     "body": "There is no playground within walking distance of downtown apartments. A two-acre park would give families like mine a safe place for the kids after school."}
+    {
+      "id": "d_copy",
+      "stance": "oppose",
+      "headline": "No parking = no customers",
+      "body": "I run a shoe repair shop on Main Street. Most of my customers drive in, drop off and leave. Take away those 600 spaces and they will just go to the mall where parking is free and easy!"
+    },
+    {
+      "id": "d_paraphrase_parking",
+      "stance": "oppose",
+      "headline": "Shops can't survive without parking",
+      "body": "If shoppers cannot find a parking space near the stores they will stop coming downtown and go to the suburban malls instead. Removing the garage will hurt every business on Main Street."
+    },
+    {
+      "id": "d_paraphrase_family",
+      "stance": "support",
+      "headline": "Wonderful for local families",
+      "body": "As a mom I love this. Downtown kids need a green place to play, run around and have picnics with friends. This park should have happened years ago."
+    },
+    {
+      "id": "d_paraphrase_heat",
+      "stance": "support",
+      "headline": "Shade trees will beat the summer heat",
+      "body": "Downtown is scorching in summer because of all the concrete. Replacing the garage with a park full of shade trees will cool the area during heat waves."
+    },
+    {
+      "id": "d_stance_flip",
+      "stance": "undecided",
+      "headline": "Finally somewhere for kids to play",
+      "body": "There is no playground within walking distance of downtown apartments. A two-acre park would give families like mine a safe place for the kids after school."
+    }
   ],
-
   "off_topic": [
-    {"id": "o_sourdough", "stance": "support", "headline": "Rye flour revived my sourdough starter",
-     "body": "My starter went sluggish over winter until I fed it with a tablespoon of dark rye flour for three days. The wild yeast came roaring back and my loaves now rise in half the time with a much more open crumb."},
-    {"id": "o_quantum", "stance": "mixed", "headline": "Error correction is the real quantum bottleneck",
-     "body": "Qubit counts make headlines, but logical error rates are what matter. Until surface codes can run below threshold with thousands of physical qubits per logical qubit, useful quantum advantage stays out of reach."},
-    {"id": "o_football", "stance": "support", "headline": "Riverton High deserved that state title",
-     "body": "What a season for the Riverton High Tigers. The defense held every opponent under fourteen points and the quarterback threw for over three thousand yards. The whole town should be proud of these kids."}
+    {
+      "id": "o_sourdough",
+      "stance": "support",
+      "headline": "Rye flour revived my sourdough starter",
+      "body": "My starter went sluggish over winter until I fed it with a tablespoon of dark rye flour for three days. The wild yeast came roaring back and my loaves now rise in half the time with a much more open crumb."
+    },
+    {
+      "id": "o_quantum",
+      "stance": "mixed",
+      "headline": "Error correction is the real quantum bottleneck",
+      "body": "Qubit counts make headlines, but logical error rates are what matter. Until surface codes can run below threshold with thousands of physical qubits per logical qubit, useful quantum advantage stays out of reach."
+    },
+    {
+      "id": "o_football",
+      "stance": "support",
+      "headline": "Riverton High deserved that state title",
+      "body": "What a season for the Riverton High Tigers. The defense held every opponent under fourteen points and the quarterback threw for over three thousand yards. The whole town should be proud of these kids."
+    }
+  ],
+  "off_topic_adjacent": [
+    {
+      "id": "oa_bus",
+      "stance": "oppose",
+      "headline": "Route 12 now skips Oak Hill after 7pm",
+      "body": "Riverton Transit cut the evening Route 12 service to Oak Hill. Anyone who works a late shift downtown now has to walk forty minutes home in the dark."
+    },
+    {
+      "id": "oa_library",
+      "stance": "support",
+      "headline": "Open the library on Sunday afternoons",
+      "body": "Working parents cannot get to the library during the week. Even four hours on Sunday afternoon would let families borrow books and use the computers."
+    },
+    {
+      "id": "oa_water",
+      "stance": "oppose",
+      "headline": "Another water rate hike with no explanation",
+      "body": "Our water bill went up again this quarter and the utility has not said why. Before charging more they should fix the main that keeps breaking on Birch Lane."
+    },
+    {
+      "id": "oa_snow",
+      "stance": "oppose",
+      "headline": "The plows skipped our street again",
+      "body": "Every storm this winter the plows cleared Main Street and forgot the side streets on the east end. Seniors on Cedar Court were snowed in for two days."
+    },
+    {
+      "id": "oa_polling",
+      "stance": "undecided",
+      "headline": "Early voting moved to the community college",
+      "body": "The early voting site has moved from the town hall to the community college campus. Is there a bus that goes there, and is there accessible parking at the new site?"
+    },
+    {
+      "id": "oa_school",
+      "stance": "mixed",
+      "headline": "Later start times at the high school",
+      "body": "The school board wants the high school to start at 8:45. Teenagers need the sleep, but it pushes after-school sports and jobs later into the evening."
+    }
   ]
 }

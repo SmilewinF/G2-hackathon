@@ -1,18 +1,29 @@
 # Rewarding novelty in user generated content
 
-A pipeline that scores a new user submission on a normalised **[0.0, 1.0]** reward. It rewards submissions that say something the other ~50 submissions haven't said, and gives nothing to submissions that are novel only because they're off-topic.
+A pipeline that scores a new user submission on a normalised **[0.0, 1.0]** reward. It rewards submissions that say something the existing ~50 submissions haven't said, as long as they're still a response to the article. Off-topic content earns nothing, however original it is.
 
 ```
 score = novelty × relevance_gate
 ```
 
-Everything runs offline on a local embedding model (no API key needed). If `GEMINI_API_KEY` is set, it switches to Gemini embeddings automatically.
+Everything runs offline on a local embedding model (no API key needed). If `GEMINI_API_KEY` is set, it switches to Gemini embeddings automatically; that path hasn't been tested with a live key.
+
+## At a glance
+
+- **Content shape:** a reader comment (headline, body, and a four-way stance) on a 95-word local-news article, compared against a clustered corpus of 50 comments.
+- **Novelty** is measured *relative to the corpus*: a submission's distance to its nearest existing comments is compared with how far a typical corpus comment is from the rest. So 0.5 means "as novel as a typical comment", and there are no hard-coded cosine thresholds.
+- **Relevance** is learned for this article: a regularised discriminant separates on-topic comments from 72 same-town *off-topic* ones (bus routes, the library, water rates…) that an independent author wrote.
+- **Held-out evaluation** on 130 labelled items the method was never tuned on:
+  - **91% of off-topic comments are blocked** (up from 33% with the previous gate), including 100% on topics the training data never covered;
+  - 55% of new ideas and 50% of paraphrases are handled correctly;
+  - see [Held-out evaluation](#held-out-evaluation) for the full picture, including what still fails.
+- **Deliverables:** 189 automated tests, a CLI, a JSON API and a responsive web UI.
 
 ## 1. The content shape
 
-**Fixed content** ([data/fixed_content.json](data/fixed_content.json), 95 words): a local-news brief. Riverton City Council votes to demolish a 600-space downtown parking garage and build a $14M park, funded by a business levy and state grants. It includes a promised construction shuttle and a public comment window.
+**Fixed content** ([data/fixed_content.json](data/fixed_content.json), 95 words): Riverton City Council votes to demolish a 600-space downtown parking garage and build a $14M park, funded by a business levy and state grants, with a construction shuttle and a public comment window.
 
-**User submission** ([novelty/models.py](novelty/models.py)): a reader comment with three discrete, user-provided properties:
+**User submission** ([novelty/models.py](novelty/models.py)): three discrete, user-provided properties.
 
 | Property   | Type                                                 | Validation     |
 |------------|------------------------------------------------------|----------------|
@@ -20,16 +31,22 @@ Everything runs offline on a local embedding model (no API key needed). If `GEMI
 | `body`     | free text                                            | 20–2000 chars  |
 | `stance`   | multi-choice: `support` · `oppose` · `mixed` · `undecided` | enum     |
 
-Text is normalised before validation: Unicode NFKC, invisible characters removed, and look-alike Cyrillic/Greek letters mapped to Latin when the text is otherwise Latin-script. This means disguised copies can't evade the checks, and zero-width padding can't meet the minimum length.
+Text is normalised before validation: Unicode NFKC, invisible characters removed, and look-alike Cyrillic/Greek letters mapped to Latin in otherwise Latin-script text. That stops disguised copies and zero-width padding.
 
-Before scoring, a **text preparation** step ([novelty/preparation.py](novelty/preparation.py)) handles each sentence:
-- **Language detection:** it decides whether the sentence is English from its function words and script. Non-English sentences are left untouched and excluded from scoring.
-- **Slang expansion:** texting shorthand is expanded (u, ppl, tbh…).
-- **Spelling correction:** unknown words are corrected with a single-edit spellchecker that prefers words from the article and corpus.
+A **text preparation** step ([novelty/preparation.py](novelty/preparation.py)) then handles each sentence:
+- **Language:** it detects whether the sentence is English from function words and script, and excludes non-English sentences from scoring.
+- **Slang:** it expands texting shorthand.
+- **Spelling:** it corrects single-edit typos, preferring words from the article and corpus. Corrections are deterministic across runs.
 
 Only the analysis sees the prepared text; the display text never changes.
 
-**Corpus** ([data/corpus.json](data/corpus.json)): 50 synthetic submissions, generated by an LLM (see [COLLABORATION.md](COLLABORATION.md)). They're deliberately *clustered* the way real comment sections are. There are 10 variations of "losing parking will kill Main Street", 9 of "great for families", 7 about cost, 6 about heat and trees, 5 about the shuttle, 5 about safety and upkeep, 4 about foot traffic, and a handful of one-offs. A corpus where every comment is unique would make "novel" meaningless. [scripts/generate_corpus.py](scripts/generate_corpus.py) regenerates a corpus of this shape with Gemini.
+**Corpus** ([data/corpus.json](data/corpus.json)): 50 synthetic comments written by an LLM, deliberately clustered the way real comment sections are:
+- 10 variations of "losing parking will kill Main Street";
+- 9 of "great for families";
+- 7 about cost, 6 about heat and trees, 5 about the shuttle, 5 about safety and upkeep, 4 about foot traffic;
+- and a handful of one-offs.
+
+A corpus where every comment is unique would make "novel" meaningless. [scripts/generate_corpus.py](scripts/generate_corpus.py) regenerates a corpus of this shape with Gemini.
 
 ## 2. How reward is decided
 
@@ -43,181 +60,148 @@ score   = novelty × Π(relevance signals)
 | Signal | Kind | What it measures |
 |---|---|---|
 | `whole_text` | novelty | Hybrid-similarity distance of the whole submission to its nearest neighbours, relative to the corpus |
-| `clause_coverage` | novelty | Novelty of the most novel *relevant, substantive* clause |
+| `clause_coverage` | novelty | Novelty of the most novel *relevant, substantive* clause (applies to multi-clause text) |
 | `duplicate` | modifier | Near-copy of a submission **or of the article itself** → 0 |
 | `quality` | modifier | Keyword lists, word repetition, no sentence-like content, unsupported language → 0 |
 | `specificity` | modifier | Fewer than 4 specific content words (generic praise) → scaled down |
-| `stance` | modifier | Rarer stance, up to +10% |
-| `relevance` | relevance | Contrastive topic margin of the substantive body → smooth gate |
+| `stance` | modifier | Stance rarity: ×0.9 for the most common stance, up to ×1.0 for the rarest |
+| `relevance` | relevance | Learned, article-specific relevance of the substantive body → smooth gate |
 
 Taking the **min** of the novelty signals means both views must agree that something is new. **Multiplying** by relevance means high novelty can't make up for being off-topic, and being on-topic can't make up for being a repeat.
 
 ### Novelty
 
-1. **Hybrid similarity** to every reference item (the corpus plus the article) = `0.6 × embedding cosine + 0.4 × TF-IDF cosine`.
-2. **Whole-text raw novelty** = `0.5 × (1 − nearest-neighbour similarity) + 0.5 × (1 − mean top-5 similarity)`. The first term asks "has someone already said this?" and the second asks "is this a crowded topic?"
-3. **Calibration against the corpus itself.** Compute the same raw novelty for every corpus item *leave-one-out*. Then convert the new submission's value to a robust z-score using the median and MAD, and map it through the normal CDF. `0.5` means "as novel as a typical existing submission". No cosine threshold is hard-coded, so the same code works with any embedding model. The MAD has a floor, so a near-constant corpus can't blow up the z-scores.
-4. **Clause coverage.** The body is split into clauses, and each relevant, substantive clause is scored against the corpus with the same calibration done at clause level. This catches two attacks that whole-text similarity misses:
-   - A "kitchen sink" comment that restates every existing take in one text. It sits between clusters, so it looks far from each one, but every clause is already covered.
-   - A stock take padded with unrelated text. The padding is off-topic, so it can't supply the novelty.
-5. **Modifiers.** Copies of a submission or of the article get 0 (≥ 60% character 5-gram containment). Text that makes no statement gets 0. Stance adjusts novelty by at most ±10% and multiplies, so it can never rescue a copy.
+1. **Hybrid similarity** to every reference item (the corpus plus the article) = `0.6 × embedding cosine + 0.4 × TF-IDF cosine`. The TF-IDF share shrinks for very short text.
+2. **Raw novelty** = `0.5 × (1 − nearest-neighbour similarity) + 0.5 × (1 − mean top-5 similarity)`: "has someone already said this?" plus "is this a crowded topic?"
+3. **Calibrated against the corpus itself.** Every corpus comment's raw novelty is computed leave-one-out. A new submission's value is then converted to a robust z-score (median/MAD) and passed through the normal CDF. This works with any embedding model.
+4. **Clause coverage** scores each relevant, substantive clause the same way. That catches a "kitchen sink" comment restating many existing takes, and a stock take padded with unrelated text.
+5. **Modifiers:**
+   - A copy (≥ 60% character 5-gram containment) gets 0, and so does text that makes no statement.
+   - Stance multiplies novelty by 0.9–1.0, so it can never rescue a copy.
 
 ### Relevance
 
-Raw embedding similarity to the article is **not** a usable relevance signal. It measures "reads like a comment about Riverton", not "is about the garage". A comment about Riverton High's football team (probe `o_football`) scored higher than several genuine garage comments, on all four local embedding models tried. The pipeline instead uses a **contrastive margin**:
+The first two approaches failed on this problem:
+- **Raw embedding similarity to the article** measures "reads like a local comment", not "responds to this article".
+- **The previous gate** measured whether a comment was closer to the topic than to generic lifestyle chatter. An independent evaluation panel showed that it let **same-town civic comments** through: "Route 7 bus cuts" and "Library hours" both scored 0.91. In this embedding space every Riverton civic comment sits in one narrow similarity band. Off-the-shelf NLI and reranker models were also tried, and both ranked a clearly on-topic parking comment below off-topic ones.
 
-```
-margin = sim(content, topic) − sim(content, generic)
-  content = the substantive clauses of the body (not the headline, not keyword lists)
-  topic   = centroid of the fixed content + admitted on-topic submissions
-  generic = centroid of 10 off-topic comments (data/off_topic_anchors.json)
-```
+The current gate ([`TopicDiscriminant`](novelty/signals/relevance.py)) **learns what this article's topic is** from labelled examples:
+- **Positives:** the article and every on-topic comment (the corpus, plus admitted submissions).
+- **Negatives:** 72 same-town comments about *other* subjects ([data/relevance_negatives.json](data/relevance_negatives.json)), plus the 10 generic anchors. The negatives cover transit, library and schools, utilities, other council business, other parks and garages, unrelated businesses and events, roads, and nature. An independent author wrote them, and a blind annotator confirmed each one is off-topic.
+- **The model:** a shrinkage Fisher discriminant, one direction in embedding space that best separates the two sets. The covariance is regularised toward the identity (shrinkage 0.9), and the boundary is placed where it best separates the training data; the gate rises across a narrow band around it. Shrinkage and band width were chosen on the evaluation set's **dev** split, and were stable when the negatives were resampled.
+- **Cost of a refit:** it's computed in Woodbury form (a ~130 × 130 solve instead of 384 × 384), so each admitted submission costs ~4 ms.
 
-**`margin ≤ 0` is a natural decision boundary:** the text looks more like unrelated chatter than like a response to this article. The margin is divided by the typical corpus margin, and a smoothstep gate maps it to the multiplier: reward is **0 at relevance ≤ 0.1** and fully open at **≥ 0.5**.
-
-Measuring only the substantive body is what defeats keyword stuffing. Appending "garage park Elm Street levy" to an unrelated comment, or stuffing the headline, adds nothing to the content that relevance is measured on.
+Relevance is judged on the substantive body only, so stuffing the headline or appending keywords can't buy it. Without at least 10 negatives, the signal falls back to the previous contrastive margin (`TopicMargin`).
 
 ### What joins the corpus
 
-`submit()` scores the submission, then applies an **admission policy**: only relevant, non-duplicate, substantive submissions become reference data. Floods of spam, copies or keyword lists therefore can't shift the calibration or redefine the topic.
+`submit()` only admits relevant, non-duplicate, substantive submissions. Admitted ones become reference data and new positives for the relevance gate, so floods of spam or copies can't shift the calibration.
 
-## 3. Results
+## 3. Held-out evaluation
 
-`python -m novelty demo` on the bundled data (local model). "Whole-text" is the pure novelty view, before the clause and modifier signals:
+`python -m novelty eval` runs the scorer over [data/eval/heldout.json](data/eval/heldout.json): **200 labelled items**.
+
+**Where they came from:**
+- Independent authors wrote them, seeing only the article and the seed corpus, never the scorer or its tests. They include:
+  - new ideas, some inside crowded clusters and some short, long or in poor English;
+  - low-overlap paraphrases of specific comments;
+  - generic comments;
+  - off-topic comments on seen topics, on topics absent from the training negatives, on distant subjects, and "tricky" ones mentioning parking in passing;
+  - idea/rewording pairs.
+- The panel's 60 red-team items are included too.
+- A blind second annotator re-labelled every item without seeing the original label, and they agreed on all 200.
+
+**How it was used:** the items are split into **dev** (70), the only data any setting was tuned on, and **test** (130), which was evaluated once. The table below is test.
+
+| Test split (130 items) | Previous gate | **Learned gate** |
+|---|---:|---:|
+| Off-topic blocked (score ≤ 0.01) | 33% | **91%** |
+| · same-town topics the negatives covered | 0% | **89%** |
+| · same-town topics the negatives never covered | 50% | **100%** |
+| · distant topics | 100% | **100%** |
+| Tricky items (own expectations) | 71% | **86%** |
+| Relevance AUC (on-topic vs off-topic) | 0.79 | **0.91** |
+| New ideas rewarded (≥ 0.6) | 66% | 55% |
+| Paraphrases not rewarded (≤ 0.25) | 53% | 50% |
+| Generic comments not rewarded | 80% | 80% |
+| AUC new vs not new | 0.79 | 0.78 |
+| Sequential: a rewording is new until the idea is submitted, then not | 0% | 0% |
+
+**What still fails, in the order it matters:**
+- **Low-overlap paraphrases and rewordings.** A comment that restates an existing point in mostly different words often scores as new. That's why only half of the paraphrases are caught, and why the sequential check fails. It passes when the rewording shares distinctive words ("stormwater sponge": 0.86 → 0.06 once the idea is submitted). The fix would be a "same point?" check on the top neighbours, such as a cross-encoder or an LLM.
+- **Off-topic leaks that remain** are the topic's nearest neighbours: other parks (a dog-run fence, cracked tennis courts), library funding, and recycling pickup.
+- **The price of the stricter gate:**
+  - New-idea reward fell 11 points: a few genuine ideas that sit near an off-topic subject, such as falcons nesting on the garage, are now gated out.
+  - Comments that are *half* unrelated chatter now score 0; the half-and-half case scored 0.74 before.
+  - Two seed comments would be blocked if they arrived fresh: c36, a short shuttle question, and c49, a process complaint about the vote.
+- **Label caveat:** the authors and annotators are the same model family as the one that built the scorer. The labels are machine-verified, not human-verified.
+
+`tests/test_heldout.py` pins this behaviour:
+- at least 85% of off-topic items blocked and relevance AUC at least 0.85 on test, plus the improvement over the previous gate;
+- floors for new ideas and paraphrases set about 10 points below the measured values, as regression guards rather than quality claims.
+
+## 4. Probe results and adversarial testing
+
+`python -m novelty demo` on the labelled probes (local model):
 
 | Probe | What it is | Whole-text novelty | Relevance | **Score** |
 |---|---|---:|---:|---:|
-| `n_flood` | design the park as stormwater retention (Elm St floods) | 0.94 | 0.99 | **0.84** |
-| `n_carbon` | keep the garage frame, build a terraced park on top (embodied carbon) | 0.90 | 0.82 | **0.85** |
-| `n_depot` | the site was the 1880s rail depot, so add a heritage walk | 0.95 | 0.94 | **0.85** |
-| `d_copy` | copy of c01 with light edits | 0.00 | 0.91 | **0.00** |
+| `n_flood` | design the park as stormwater retention | 0.94 | 1.00 | **0.84** |
+| `n_carbon` | keep the garage frame, terraced park on top | 0.90 | 1.00 | **0.85** |
+| `n_depot` | the site was the 1880s rail depot: add a heritage walk | 0.95 | 1.00 | **0.85** |
+| `d_copy` | copy of c01 with light edits | 0.00 | 1.00 | **0.00** |
 | `d_paraphrase_parking` | reworded "no parking = no customers" | 0.01 | 1.00 | **0.01** |
-| `d_paraphrase_family` | reworded "great for families" | 0.04 | 0.72 | **0.04** |
-| `d_paraphrase_heat` | reworded "trees will cool downtown" | 0.00 | 0.92 | **0.00** |
 | `d_stance_flip` | exact copy of c11 with the rarest stance | 0.00 | 1.00 | **0.00** |
-| `o_sourdough` | sourdough starter tip | 1.00 | 0.00 | **0.00** |
-| `o_quantum` | quantum error correction | 1.00 | 0.00 | **0.00** |
 | `o_football` | Riverton High football (same town, different subject) | 1.00 | 0.00 | **0.00** |
+| `oa_bus` … `oa_school` | six same-town civic comments (bus route, library hours, water rates, snow plowing, polling place, school start times) | 0.99–1.00 | 0.00 | **0.00** (0.45–0.97 with the previous gate) |
 
-The corpus updates as submissions arrive. A reworded version of the stormwater idea scores **0.86** before anyone has submitted it. Once `n_flood` has been submitted, the same text scores **0.06**.
-
-## 4. Adversarial testing
-
-Every attack below was run against the earlier version of the pipeline, and each is now a regression test in [tests/test_adversarial.py](tests/test_adversarial.py):
+Attacks that once broke the pipeline, each now a regression test in [tests/test_adversarial.py](tests/test_adversarial.py):
 
 | Attack | Before | Now | Defence |
 |---|---:|---:|---|
 | Keyword stuffing ("…sourdough… garage park Elm Street levy") | 0.61 | **0.00** | relevance measured on the substantive body only |
-| "Kitchen sink" listing every existing take | 0.81 | **0.24** | clause coverage |
+| "Kitchen sink" listing every existing take | 0.81 | **0.23** | clause coverage |
 | "park" × 40 | 0.77 | **0.00** | content-quality check |
 | Stock take padded with crypto spam | 0.66 | **0.00** | clause coverage + relevance on content |
-| Echoing the article | 0.45 | **0.00** | the article is a reference item for copy detection |
-| Paraphrasing the article | 0.58 | **0.00** | the article is a novelty neighbour |
-| Copy using Cyrillic look-alike letters or zero-width characters | copy undetected | **caught** | text normalisation |
-| Flooding the corpus with 20 template variants of one take | n/a | probe scores move ≤ 0.15 | admission policy + robust calibration |
+| Echoing / paraphrasing the article | 0.45 / 0.58 | **0.00** | the article is a reference item |
+| Copies using look-alike letters or zero-width characters | undetected | **caught** | text normalisation |
+| Stock take with heavy typos ("Withot the garaje peple cant park…") | 0.86 | **0.02** | spelling correction |
 
-These already held up and are pinned as tests too: sentence shuffles, synonym swaps, negation, concatenating two existing comments, gibberish, URL spam, emoji walls and prompt injection. A **positive control** checks that the new-idea probes still score ≥ 0.6 on every signal, including with a friendly opener ("Great to see this passing…").
+Input edge cases ([tests/test_edge_cases.py](tests/test_edge_cases.py)):
 
-### Input edge cases
-
-These are covered by [tests/test_edge_cases.py](tests/test_edge_cases.py). The rule throughout is to reward only content the pipeline can assess and that's actually new. Poor spelling must neither *cost* a relevant idea its reward nor *buy* novelty for a stock take.
-
-| Case | Score | Why |
-|---|---:|---|
-| English novel idea + Spanish / French / Hindi text | 0.81 | foreign sentences are excluded; the English idea is rewarded |
-| English stock take + Spanish novel idea | 0.11 | the untranslated half can't be assessed, so it can't supply novelty (was 0.49) |
-| Spanish only | 0.00 | "not in a supported language" |
-| Short novel idea: "Put EV chargers at the outer shuttle lot." | 0.83 | a single clause is judged by whole-text novelty (was 0.05) |
-| Short stock take: "No parking means shops will close." | 0.00 | TF-IDF weight shrinks for very short text, so one rare word can't dominate |
-| Short generic praise: "I love this park idea!" | 0.00 | specificity (was 0.41) |
-| 129-word novel essay / 100-word rehash of existing takes | 0.70 / 0.28 | |
-| Half off-topic chatter + half novel idea | 0.74 | the novel half is rewarded |
-| Novel idea in broken English, heavy typos, texting style, ESL grammar | 0.55–0.89 | relevance gate stays open |
-| Stock take with heavy typos ("Withot the garaje peple cant park…") | 0.02 | spelling correction (was **0.86**: typos read as novelty) |
-
-The web server is hardened as well:
-- Malformed requests get a JSON `400`: invalid JSON, non-object bodies, wrong field types, oversized bodies, a bad `Content-Length`.
-- Backend failures get a `503` instead of a dropped connection.
-- `commit` must be literally `true`.
-- The submissions log is written atomically and quarantined if it becomes corrupted.
-- The embedding cache is written atomically, and malformed vectors from a backend are refused.
+| Case | Score |
+|---|---:|
+| English new idea + Spanish / French / Hindi text | 0.81 (foreign text excluded) |
+| English stock take + Spanish new idea | 0.11 (the untranslated half can't supply novelty) |
+| Short new idea: "Put EV chargers at the outer shuttle lot." | 0.83 |
+| Short stock take / generic praise | 0.08 / 0.01 |
+| New idea in broken English, heavy typos, texting style | 0.55–0.89 |
+| Half off-topic chatter + half new idea | 0.00 (trade-off of the learned gate, see above) |
 
 ## 5. Automated tests
 
 ```
-pytest            # 120 tests, ~2 s after the first model download
+pytest            # 189 tests, a few seconds after the first model download
 ```
 
-| Requirement from the brief | Test ([tests/test_behavior.py](tests/test_behavior.py)) |
+| Requirement from the brief | Where it is tested |
 |---|---|
-| Truly novel content is rewarded | `test_truly_novel_relevant_content_is_rewarded` (score ≥ 0.6, gate fully open) |
-| Non-novel content is not rewarded | `test_non_novel_content_is_not_rewarded` (≤ 0.25 *while on-topic*), `test_verbatim_copy_…`, `test_changing_only_the_stance_…`, `test_padding_a_copy_…` |
-| **High novelty, low relevance is not rewarded** | `test_high_novelty_but_low_relevance_is_not_rewarded` asserts whole-text novelty ≥ 0.8 **and** score ≤ 0.01. `test_same_town_different_subject_is_not_rewarded` covers the hard case |
-| Remain relevant to the fixed content | `test_relevance_gate_keeps_nearly_all_genuine_responses` (≥ 90% of real corpus responses keep the full gate), `test_off_topic_spam_does_not_redefine_the_topic` |
-| Novelty is *relative to other submissions* | `test_novelty_is_relative_to_what_has_been_submitted`, `test_crowded_takes_are_less_novel_than_one_off_takes_within_the_corpus` |
-| Normalised to [0, 1] | `test_all_scores_are_normalised`, plus model-free invariants in [tests/test_math.py](tests/test_math.py) |
+| Truly novel content is rewarded | `test_behavior.py::test_truly_novel_relevant_content_is_rewarded`; held-out floors in `test_heldout.py` |
+| Non-novel content is not rewarded | `test_non_novel_content_is_not_rewarded`, copy/stance-flip/padding tests, `test_adversarial.py` |
+| **High novelty, low relevance is not rewarded** | `test_high_novelty_but_low_relevance_is_not_rewarded` (novelty ≥ 0.8 **and** score ≤ 0.01); `test_same_town_civic_comments_about_other_subjects_are_not_rewarded`; `test_heldout.py::test_off_topic_content_is_not_rewarded_on_unseen_inputs` |
+| Remain relevant to the fixed content | `test_relevance_gate_keeps_nearly_all_genuine_responses` (≥ 90% of corpus comments keep a full gate, leave-one-out) |
+| Novelty is relative to other submissions | `test_novelty_is_relative_to_what_has_been_submitted`, `test_crowded_takes_are_less_novel_than_one_off_takes_within_the_corpus` |
+| Normalised to [0, 1] | `test_all_scores_are_normalised`, model-free invariants in `test_math.py` |
 
-The other test files cover the rest:
-- [tests/test_adversarial.py](tests/test_adversarial.py): the attacks above.
-- [tests/test_edge_cases.py](tests/test_edge_cases.py): mixed languages, very short and very long input, and poor English.
-- [tests/test_math.py](tests/test_math.py): the maths, text normalisation, calibration guards, plugging in a custom signal, and a check that incremental calibration equals a full refit. It uses a toy embedder, so no model is needed.
-- [tests/test_server.py](tests/test_server.py): the HTTP API, persistence and malformed requests.
-- [tests/test_shape.py](tests/test_shape.py): the data contract.
+**The other test files:**
+- `test_heldout.py`: evaluation-set integrity and aggregate bars.
+- `test_edge_cases.py`, including a check that spelling correction is identical across processes.
+- `test_math.py`: the maths, calibration guards, and that incremental equals a full refit. It uses a toy embedder, so it needs no model.
+- `test_errors_logging.py`, `test_server.py`, `test_shape.py` and `test_examples.py`.
 
-Tests are pinned to the local model so they're deterministic and need no key. `NOVELTY_TEST_EMBEDDER=gemini pytest` runs the same behavioural suite on Gemini.
+**Test corpus:** by default the tests run against the whole corpus, meaning the seed comments plus admitted web-UI submissions from `data/user_submissions.json`. A probe that was already submitted is asserted as a copy, or skipped with the covering id. `NOVELTY_TEST_CORPUS=seed pytest` pins the seed corpus for reproducible runs. Tests use the local model; `NOVELTY_TEST_EMBEDDER=gemini` would run them on Gemini.
 
-## Architecture
-
-```
-novelty/
-  models.py        Submission / FixedContent / ScoreBreakdown (validation + normalisation)
-  text.py          normalisation, clause splitting, substantive-clause check, shingles
-  preparation.py   per-sentence language detection, slang expansion, spelling correction (pluggable)
-  embeddings.py    local (fastembed, lazy-loaded) and Gemini backends, SQLite vector cache
-  lexical.py       sparse TF-IDF with an inverted index and amortised refits
-  index.py         ReferenceIndex: article + admitted submissions, prepared and embedded once
-  signals/         one class per signal, all implementing Signal.fit / Signal.evaluate
-    base.py        Signal, Kind, SignalResult, RobustScale
-    novelty.py     WholeTextNovelty, ClauseCoverage
-    modifiers.py   DuplicateCheck, ContentQuality, Specificity, StanceRarity
-    relevance.py   TopicMargin
-  scorer.py        NoveltyScorer: analyse → evaluate signals → combine → admission policy
-  server.py        stdlib HTTP server + static/index.html
-```
-
-**Adding a component** (an LLM relevance judge, a toxicity filter, a language check): subclass `Signal`, choose a `Kind`, and pass it in. Nothing else changes:
-
-```python
-class BannedWord(Signal):
-    name, kind = "banned_word", Kind.MODIFIER
-    def evaluate(self, analysis, index):
-        hit = "scam" in analysis.text.lower()
-        return SignalResult(0.0 if hit else 1.0, ["contains a banned word"] if hit else [])
-
-scorer = NoveltyScorer(fixed, corpus, embedder, anchors,
-                       signals=[*default_signals(ScorerConfig()), BannedWord()])
-```
-
-A signal that needs calibration implements `fit(index)`. After inserts, the scorer calls `update(index, added)`, which defaults to `fit`; override it for an incremental update. `test_custom_signals_plug_into_the_pipeline` exercises exactly this. A different language or domain plugs in the same way, as a `TextPreparer`.
-
-## Performance
-
-Every optimisation below was measured first. The benchmark scripts are described in [COLLABORATION.md](COLLABORATION.md).
-
-| What | Before | After | Change |
-|---|---:|---:|---|
-| `score()` of new text (local model) | ~90 ms | **~15–20 ms** | Embedding cache moved from JSON (the whole file rewritten on every miss: 77% of request time, growing without bound) to SQLite (one row per text, float32 blobs). What's left is model inference. |
-| HTTP request via `localhost` on Windows | +200 ms | **+0.5 ms** | The server also listens on IPv6 loopback. `localhost` resolves to `::1` first, and a refused connect cost 200 ms per request. |
-| add + recalibrate, 1,000-entry corpus | 555 ms | **5.6 ms** | Incremental calibration. Each text is tokenised and vectorised once, with an inverted index for TF-IDF. Top-k neighbours and per-clause best matches are updated only where a new entry beats them. IDF refits only after 10% growth, so the rebuild cost is amortised. A test proves incremental equals a full refit. |
-| `score()`, 1,000-entry corpus (excluding model) | 8.8 ms | **1.4 ms** | The copy check examines the 25 most similar entries and the article, not all n. |
-| Server start, warm cache | ~1.3 s | **0.3 s** | The ONNX model is lazy-loaded and warmed in a background thread. Saved submissions are replayed as one batch. |
-| Scorer rebuild on Reset / per test | 24.5 ms | **9 ms** | Forks a pristine scorer (deep copy that shares the model and the spellchecker) instead of rebuilding it. |
-| Score response size | O(corpus) | **~1.4 KB** | Returns the corpus size and the nearest neighbours' headlines, not every headline. |
-| Test suite | 9.6 s | **~2 s** | 8 s of it was `httpd.shutdown()` waiting on the 0.5 s poll interval. Tests also fork one pre-built scorer. |
-
-Not changed, because it was measured and there's no gain available: ONNX thread count (the default of all cores is fastest for these small batches: 14 ms, versus 21 ms for 2 threads and 38 ms for 1), and the number of texts embedded per request (single-clause text already de-duplicates to two embeddings, and multi-clause text needs its clause vectors).
-
-## Running it
+## 6. Running it
 
 ```bash
 python -m venv .venv
@@ -225,46 +209,102 @@ python -m venv .venv
 pip install -e ".[dev,gemini]"
 
 pytest
-python -m novelty serve                    # minimal web UI at http://127.0.0.1:8000
+python -m novelty serve                    # web UI at http://127.0.0.1:8000
+python -m novelty eval --split test        # held-out evaluation (dev | test | all, --json)
 python -m novelty demo                     # score all labelled probes
 python -m novelty corpus                   # leave-one-out novelty of each corpus item
 python -m novelty score --stance support \
   --headline "Put solar canopies over the shuttle lot" \
   --body "The outer shuttle lot is acres of bare asphalt; solar canopies would shade cars and help pay for the park."
-python -m novelty score ... --json         # full breakdown, including every signal
 
-# Optional: Gemini (free key at https://aistudio.google.com/)
+# Optional: Gemini (free key at https://aistudio.google.com/); untested with a live key
 export GEMINI_API_KEY=...
-python -m novelty demo                     # now uses gemini-embedding-001
 python scripts/generate_corpus.py          # regenerate a synthetic corpus → data/corpus.generated.json
 ```
 
-The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only) shows:
-- the article
-- a form for the three properties
-- one-click example probes
-- the full score breakdown, with nearest neighbours
+**The web UI** (standard library only, responsive, light and dark themes):
+- **What it shows:** the article, the three-field form, two examples per stance ([data/examples.json](data/examples.json), verified by `tests/test_examples.py`), and the result. The result gives the score, a plain-language verdict, novelty and relevance bars, and the most similar existing comment. A collapsed **Details** section holds the formula, every signal and the nearest comments.
+- **Buttons:**
+  - **Score** leaves the corpus unchanged.
+  - **Score and add to corpus** applies the admission policy and logs the attempt to `data/user_submissions.json` (gitignored). Admitted submissions are replayed on restart.
+  - **Reset my submissions** clears them.
 
-It has three buttons:
-- **Score** leaves the corpus unchanged.
-- **Score & add to corpus** submits the comment. If the admission policy accepts it, it joins the corpus, so the same idea scores lower next time. If it's rejected, the page says so and why. Every attempt is logged to `data/user_submissions.json` (gitignored), and admitted ones are replayed when the server restarts.
-- **Reset my submissions** clears the log.
+**Environment variables:**
 
-User submissions are deliberately kept out of `data/corpus.json`, the fixed 50-item seed corpus that the tests and the numbers above are calibrated against.
+| Variable | Effect |
+|---|---|
+| `NOVELTY_EMBEDDER=local\|gemini` | Chooses the embedding backend. |
+| `NOVELTY_CACHE_DIR` | Sets the model and embedding cache location (default `.cache/`). |
+| `NOVELTY_LOG_LEVEL` / `NOVELTY_LOG_FILE` | Logging level, and an optional log file. |
+| `NOVELTY_TEST_EMBEDDER` / `NOVELTY_TEST_CORPUS` | Test backend and test corpus. |
+| `GEMINI_MODEL` | Model for the corpus generator. |
 
-The first run downloads `BAAI/bge-small-en-v1.5` (~70 MB ONNX) into `.cache/`. Embeddings are cached on disk by model and text hash.
+The first run downloads `BAAI/bge-small-en-v1.5` (~70 MB ONNX) into `.cache/`.
 
-## Design decisions backed by experiment
+## 7. Logging and errors
 
-- **Self-calibrating, not thresholded.** Cosine values for "the same idea" vary a lot between models (0.84–0.92 on bge-small, different again on Gemini). Every threshold is expressed relative to a distribution computed from the data: the corpus median and MAD for novelty, and zero margin plus the corpus median margin for relevance.
-- **Hybrid over a bigger model.** With embeddings alone, a reworded version of an already-submitted idea still scored 0.60. Switching to the larger `bge-base` model didn't help (0.81). Adding IDF-weighted term overlap brought it down to about 0.1.
-- **Contrastive relevance over topic keywords.** A keyword list derived from the article and corpus was tried and dropped. The football comment shares "Riverton" and "state" with the article, so keyword overlap gave it partial credit.
-- **Clause coverage over "closeness to the average comment".** Both were tried against the kitchen-sink attack. Closeness to the average comment rated it as ordinary (z = −0.09). Clause coverage dropped it from 0.81 to 0.23.
+Every scored input leaves two INFO lines: the input, and the result with its calculation and timing. `-v` (DEBUG) adds every signal, the nearest neighbours, clause counts and spelling corrections:
 
-## Known limitations and next steps
+```
+INFO    [-] novelty.scorer: submit input: id=u03 stance=support words=19 headline="Design the park to soak up floods"
+INFO    [-] novelty.scorer: submit result: id=u03 score=0.823 = novelty 0.823 x gate 1.00 | whole 0.91 clause 0.95 | relevance 1.00 margin +41.873 | added to corpus | 8 ms (embed 0 ms, 0 new)
+```
 
-- **English only.** Non-English sentences are detected and excluded, so they're neither rewarded nor penalised, and foreign-only text gets a clear "not in a supported language" reason. Supporting other languages means a multilingual embedder (Gemini's is), plus a `TextPreparer` for that language. Code-mixed sentences, like Spanglish, can't be assessed and currently earn nothing.
-- **Short, question-style comments** are the weakest case for relevance. `c36` ("Where exactly is the outer lot, how often will the shuttle run…?") is clearly on-topic but keeps only part of the gate (relevance 0.23). An **LLM relevance judge** (Gemini, structured yes/no with rationale) run *only* on the gray zone of 0.1–0.5 would fix this cheaply. With the signal interface it's one new `RELEVANCE` class.
-- **Score oracle.** `/api/score` without commit lets someone iterate on wording until it scores well. A production deployment would rate-limit it or hide the breakdown.
-- **Quality isn't judged beyond "makes a statement".** A novel but abusive or factually false comment is rewarded on novelty. In production this pipeline would sit behind moderation, which would be another `MODIFIER` signal.
-- **Scale.** Per-insert cost is now O(n), 5.6 ms at 1,000 entries, with a full O(n²) refit only after 10% growth. At tens of thousands of entries the dense `n × d` similarity per query becomes the bottleneck. That's the point to add an approximate-nearest-neighbour index (e.g. FAISS / hnswlib) behind `ReferenceIndex`.
+These lines were captured from a script, so they carry no request id (`[-]`); in the web server each line carries the request's id, like `[r000007]`. The margin is the submission's distance from the learned relevance boundary, in discriminant units: negative means off-topic.
+
+**Errors:** every error is a `NoveltyError` ([novelty/errors.py](novelty/errors.py)).
+- `ValidationError` for bad input → HTTP 400.
+- `DataError` names the file and item.
+- `EmbeddingError` for a model or network failure → HTTP 503. Gemini retries transient errors only.
+- `CalibrationError` when the reference data can't support a calibration.
+- `ScoringError` names the failing signal.
+
+The request id ties the log lines of one web request together and is returned in every error response. Optional parts (the embedding cache, spelling correction, saving the submissions log) degrade with a warning instead of failing the request.
+
+## 8. Architecture
+
+```
+novelty/
+  models.py        Submission / FixedContent / ScoreBreakdown (validation + normalisation)
+  text.py          normalisation, clause splitting, substantive-clause check, shingles
+  preparation.py   per-sentence language detection, slang expansion, deterministic spelling correction
+  embeddings.py    local (fastembed, lazy-loaded) and Gemini backends, SQLite vector cache
+  lexical.py       sparse TF-IDF with an inverted index and amortised refits
+  index.py         ReferenceIndex: article, admitted submissions, anchors and relevance negatives
+  signals/         one class per signal: fit / update / evaluate
+    novelty.py     WholeTextNovelty, ClauseCoverage
+    modifiers.py   DuplicateCheck, ContentQuality, Specificity, StanceRarity
+    relevance.py   TopicDiscriminant (default), TopicMargin (fallback)
+  scorer.py        NoveltyScorer: analyse → evaluate signals → combine → admission policy
+  evaluation.py    held-out evaluation: pass rates, AUCs, sequential check
+  data.py          loaders for data/*.json, build_scorer()
+  errors.py, logging_setup.py, __main__.py (CLI), server.py + static/index.html
+data/
+  corpus.json, fixed_content.json, off_topic_anchors.json, relevance_negatives.json,
+  probes.json, examples.json, eval/heldout.json
+```
+
+**Adding a component** (an LLM judge, a toxicity filter, a language check) means subclassing `Signal`, choosing a `Kind`, and passing it in with `NoveltyScorer(signals=[*default_signals(config), MySignal()])`. A signal that needs calibration implements `fit(index)` and, optionally, an incremental `update(index, added)`.
+
+## 9. Performance
+
+Every optimisation was measured first.
+
+| What | Before | After | Change |
+|---|---:|---:|---|
+| `score()` of new text (local model) | ~90 ms | **~15–20 ms** | SQLite embedding cache instead of rewriting a JSON file on every miss |
+| HTTP via `localhost` on Windows | +200 ms | **+0.5 ms** | also listen on IPv6 loopback |
+| add + recalibrate, 1,000-entry corpus | 555 ms | **5.6 ms** | incremental calibration (tested equal to a full refit) |
+| add, including the relevance refit | 15 ms | **~4 ms** | Woodbury form of the discriminant (exact to 1e-15) |
+| Server start, warm cache | ~1.3 s | **0.3 s** | lazy model load, batch replay |
+| Test suite | 9.6 s | **~4–7 s** | short server poll interval, forked scorer fixture |
+
+## 10. Known limitations
+
+- **Paraphrases in different words** and the sequential "new until someone says it" property are the main quality gap (see [Held-out evaluation](#held-out-evaluation)).
+- **The closest neighbours of the topic still leak:** other parks, library funding and recycling. Mixed comments that are half off-topic now earn nothing, and short questions and process complaints (c36, c49) are at risk of being gated out.
+- **English only.** Non-English sentences are excluded, so they're neither rewarded nor penalised. Code-mixed sentences earn nothing.
+- **Machine-labelled evaluation:** no human labels yet, and there's one article only. The relevance negatives are specific to this article, so a new article needs its own; with fewer than 10, the gate falls back to the contrastive margin.
+- **Gemini is untested** with a live key.
+- **Score oracle and moderation.** `/api/score` can be used to iterate on wording, and abusive or false comments are judged only on novelty. A deployment would add rate limiting and a moderation signal.
+- **Scale.** Each insert is O(n). At tens of thousands of entries, add an approximate-nearest-neighbour index behind `ReferenceIndex`.

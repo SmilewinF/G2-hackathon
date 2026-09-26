@@ -3,42 +3,57 @@
     python -m novelty serve [--port 8000]
 
 GET  /              the page (novelty/static/index.html)
-GET  /api/context   fixed content, corpus headlines, example probes
-POST /api/score     {"headline", "body", "stance", "commit": bool} -> ScoreBreakdown JSON
+GET  /api/context   fixed content, stances, corpus size, user count, UI examples (two per stance),
+                    labelled probes, embedder name
+POST /api/score     {"headline", "body", "stance", "commit": bool} -> {"corpus_size", "user_count",
+                    "result": ScoreBreakdown JSON with a "headline" added to each nearest entry,
+                    "id": the new id if admitted else null, "saved": bool (only when committed)}
                     commit=true runs submit(): the attempt is logged to data/user_submissions.json
                     and, if the admission policy accepts it, added to the corpus. Admitted entries
                     are replayed on the next start.
-POST /api/reset     forget all user submissions (deletes that file, rebuilds the scorer)
+POST /api/reset     forget all user submissions (deletes that file, forks the pristine seed-corpus
+                    scorer again instead of rebuilding it)
 
 User submissions are kept out of data/corpus.json on purpose: the tests and README numbers are
 calibrated against that fixed 50-item seed corpus.
+
+Errors always come back as JSON {"error": ..., "request_id": ...}: 400 for bad input, 404 for an
+unknown path, 503 when the embedding backend is unavailable or an OSError (disk or network
+trouble) escapes a route, 500 otherwise (details in the server log under the same request id).
 """
 
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
+import logging
 import os
 import socket
-import sys
 import threading
-import traceback
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
-from .data import DATA_DIR, build_scorer, load_probes
-from .models import Stance, Submission
+from .data import USER_FILE, build_scorer, load_examples, load_probes, write_json_atomic
+from .errors import EmbeddingError, NoveltyError, ValidationError
+from .index import ARTICLE_ID
+from .logging_setup import configure_logging, request_id
+from .models import ScoreBreakdown, Stance, Submission
 from .scorer import NoveltyScorer
 
+log = logging.getLogger(__name__)
+
 STATIC = Path(__file__).resolve().parent / "static"
-USER_FILE = DATA_DIR / "user_submissions.json"
 MAX_BODY_BYTES = 16_384
+_request_ids = itertools.count(1)
 
 
-class BadRequest(ValueError):
+class BadRequest(ValidationError):
     pass
 
 
@@ -49,6 +64,8 @@ class App:
         self.lock = threading.Lock()
         self._pristine = scorer_factory()  # seed corpus only; reset() forks it instead of rebuilding
         self.user_file = user_file
+        self.probes = load_probes()  # static data for the page: read once, not per request
+        self.examples = load_examples()
         self._load()
 
     # ------------------------------------------------------------------ persistence
@@ -62,15 +79,17 @@ class App:
                 continue
             try:
                 sub = Submission.from_dict(rec)
-            except (KeyError, TypeError, ValueError) as e:
-                print(f"skipping saved submission {rec.get('id')!r}: {e}", file=sys.stderr)
+            except ValidationError as e:
+                log.warning("skipping saved submission %r: %s", rec.get("id"), e)
                 continue
             if sub.id in seen:
-                print(f"skipping saved submission with duplicate id {sub.id!r}", file=sys.stderr)
+                log.warning("skipping saved submission with duplicate id %r", sub.id)
                 continue
             seen.add(sub.id)
             replay.append(sub)
         self.scorer.add_many(replay)  # one recalibration for the whole log, not one per record
+        if replay:
+            log.info("replayed %d saved submission(s) from %s", len(replay), self.user_file.name)
 
     def _read_records(self) -> list[dict]:
         if not self.user_file.exists():
@@ -82,14 +101,26 @@ class App:
             return records
         except (ValueError, UnicodeDecodeError) as e:  # JSONDecodeError is a ValueError
             backup = self.user_file.with_name(self.user_file.stem + ".corrupt.json")
-            os.replace(self.user_file, backup)
-            print(f"{self.user_file.name} is unreadable ({e}); moved it to {backup.name}", file=sys.stderr)
+            try:
+                os.replace(self.user_file, backup)
+                log.warning("%s is unreadable (%s); moved it to %s", self.user_file.name, e, backup.name)
+            except OSError as move_error:
+                log.error("%s is unreadable (%s) and could not be moved aside (%s); starting empty",
+                          self.user_file.name, e, move_error)
+            return []
+        except OSError as e:
+            log.error("cannot read %s (%s); starting without saved submissions", self.user_file, e)
             return []
 
-    def _save(self) -> None:
-        tmp = self.user_file.with_name(self.user_file.name + ".tmp")
-        tmp.write_text(json.dumps(self.records, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, self.user_file)  # atomic: a crash mid-write cannot corrupt the log
+    def _save(self) -> bool:
+        try:
+            write_json_atomic(self.user_file, self.records)  # a crash mid-write cannot corrupt the log
+            return True
+        except OSError as e:
+            # The submission is already scored and (if admitted) in the corpus; losing the disk
+            # copy must not fail the request. The next successful save writes it too.
+            log.error("could not save %s: %s", self.user_file, e)
+            return False
 
     # ------------------------------------------------------------------ operations
 
@@ -98,13 +129,19 @@ class App:
         return sum(bool(r.get("admitted")) for r in self.records)
 
     def headline(self, entry_id: str) -> str:
-        if entry_id == "article":
+        if entry_id == ARTICLE_ID:
             return self.scorer.fixed.title
         entry = self.scorer.index.get(entry_id)
         return entry.submission.headline if entry and entry.submission else ""
 
-    def submit(self, sub: Submission):
-        sub = dataclasses.replace(sub, id=f"u{len(self.records) + 1:02d}")
+    def _next_id(self) -> str:
+        n = len(self.records) + 1
+        while self.scorer.index.get(f"u{n:02d}") is not None:
+            n += 1
+        return f"u{n:02d}"
+
+    def submit(self, sub: Submission) -> tuple[Submission, ScoreBreakdown, bool]:
+        sub = dataclasses.replace(sub, id=self._next_id())
         result = self.scorer.submit(sub)
         self.records.append({
             "id": sub.id,
@@ -115,22 +152,26 @@ class App:
             "admitted": result.admitted,
             "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
-        self._save()
-        return sub, result
+        return sub, result, self._save()
 
     def reset(self) -> None:
-        self.user_file.unlink(missing_ok=True)
+        try:
+            self.user_file.unlink(missing_ok=True)
+        except OSError as e:
+            raise NoveltyError(f"could not delete {self.user_file.name}: {e}") from e
         self._load()
+        log.info("user submissions reset; corpus back to %d", len(self.scorer.corpus))
 
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt, *args):  # keep the console quiet
+        def log_message(self, fmt, *args):  # replaced by our own access log below
             pass
 
         # -------------------------------------------------------------- plumbing
 
         def _send(self, status: int, body: bytes, content_type: str) -> None:
+            self._status = status
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -142,6 +183,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def _json(self, status: int, payload) -> None:
             self._send(status, json.dumps(payload).encode(), "application/json")
+
+        def _error(self, status: int, message: str) -> None:
+            self._json(status, {"error": message, "request_id": request_id.get()})
 
         def _read_json(self) -> dict:
             try:
@@ -158,18 +202,36 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 raise BadRequest("request body must be a JSON object")
             return data
 
-        def _guarded(self, route: Callable[[], None]) -> None:
+        def _guarded(self, route: Callable[[str], None]) -> None:
             """Every failure becomes a JSON error response instead of a dropped connection."""
+            token = request_id.set(f"r{next(_request_ids):06d}")
+            start, self._status = time.perf_counter(), 0
+            path = urlsplit(self.path).path
             try:
-                route()
-            except BadRequest as e:
-                self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
-            except (OSError, RuntimeError) as e:  # embedder / network / disk failure
-                traceback.print_exc()
-                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": f"scoring unavailable: {e}"})
+                route(path)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                log.debug("client disconnected during %s %s", self.command, path)
+                return
+            except ValidationError as e:  # includes BadRequest
+                log.info("rejected %s %s: %s", self.command, path, e)
+                self._error(HTTPStatus.BAD_REQUEST, str(e))
+            except EmbeddingError as e:
+                log.error("embedding backend unavailable: %s", e)
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE, f"scoring unavailable: {e}")
+            except NoveltyError as e:
+                log.exception("request failed: %s", e)
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+            except OSError as e:  # disk or network trouble outside the embedder
+                log.exception("request failed: %s", e)
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE, f"service unavailable: {e}")
             except Exception:
-                traceback.print_exc()
-                self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error, see server log"})
+                log.exception("unexpected error in %s %s", self.command, path)
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR,
+                            f"internal error (request {request_id.get()}), see server log")
+            finally:
+                log.debug("%s %s -> %s in %.1f ms", self.command, path, self._status,
+                          (time.perf_counter() - start) * 1000)
+                request_id.reset(token)
 
         def _state(self) -> dict:
             # Sizes only: shipping every headline on every response made payloads O(corpus).
@@ -183,84 +245,114 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             self._guarded(self._post)
 
-        def _get(self) -> None:
-            if self.path == "/":
+        def _get(self, path: str) -> None:
+            if path == "/":
                 self._send(HTTPStatus.OK, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-            elif self.path == "/api/context":
+            elif path == "/api/context":
                 with app.lock:
                     self._json(HTTPStatus.OK, {
                         **self._state(),
                         "fixed": dataclasses.asdict(app.scorer.fixed),
                         "stances": [s.value for s in Stance],
-                        "probes": load_probes(),
+                        "probes": app.probes,
+                        "examples": app.examples,
                         "embedder": app.scorer.embedder.name,
                     })
             else:
-                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                self._error(HTTPStatus.NOT_FOUND, "not found")
 
-        def _post(self) -> None:
-            if self.path == "/api/reset":
+        def _post(self, path: str) -> None:
+            if path == "/api/reset":
                 with app.lock:
                     app.reset()
                     self._json(HTTPStatus.OK, self._state())
                 return
-            if self.path != "/api/score":
-                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            if path != "/api/score":
+                self._error(HTTPStatus.NOT_FOUND, "not found")
                 return
             data = self._read_json()
             try:
                 sub = Submission(headline=data.get("headline", ""), body=data.get("body", ""),
                                  stance=data.get("stance", ""))
-            except ValueError as e:
+            except ValidationError as e:
                 raise BadRequest(str(e)) from None
+            saved = None
             with app.lock:
                 if data.get("commit") is True:
-                    sub, result = app.submit(sub)
+                    sub, result, saved = app.submit(sub)
                 else:
                     result = app.scorer.score(sub)
                 payload = dataclasses.asdict(result)
                 for n in payload["nearest"]:
                     n["headline"] = app.headline(n["id"])
-                self._json(HTTPStatus.OK, {
+                response = {
                     **self._state(),
                     "result": payload,
                     "id": sub.id if result.admitted else None,
-                })
+                }
+            if saved is not None:
+                response["saved"] = saved
+            self._json(HTTPStatus.OK, response)
 
     return Handler
 
 
-class _IPv6Server(ThreadingHTTPServer):
+class _Server(ThreadingHTTPServer):
+    """HTTPServer sets SO_REUSEADDR, which on Windows lets a second server bind a port that is
+    already in use. Bind exclusively there, so "port in use" is reported instead of hidden."""
+
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+class _IPv6Server(_Server):
     address_family = socket.AF_INET6
 
 
 def _loopback_servers(host: str, port: int, handler) -> list[ThreadingHTTPServer]:
     """Listen on IPv4 *and* IPv6 loopback. On Windows "localhost" resolves to ::1 first, and a
     refused IPv6 connect costs ~200 ms per request before the client falls back to IPv4."""
-    servers = [ThreadingHTTPServer((host, port), handler)]
+    try:
+        servers: list[ThreadingHTTPServer] = [_Server((host, port), handler)]
+    except OSError as e:
+        raise NoveltyError(f"cannot listen on {host}:{port}: {e.strerror or e} "
+                           f"(is another server already running? try --port)") from e
     if host in ("127.0.0.1", "localhost") and socket.has_ipv6:
         try:
             servers.append(_IPv6Server(("::1", port), handler))
-        except OSError:
-            pass  # IPv6 loopback unavailable: IPv4 still works
+        except OSError as e:
+            log.debug("IPv6 loopback unavailable (%s); IPv4 only", e)
     return servers
 
 
+def _warmup(embedder) -> None:
+    try:
+        getattr(embedder, "warmup", lambda: None)()
+    except EmbeddingError as e:
+        log.warning("model warmup failed (%s); the first new text will retry", e)
+
+
 def serve(port: int = 8000, host: str = "127.0.0.1", user_file: Path = USER_FILE) -> None:
-    print("loading model and corpus...")
+    if not logging.getLogger("novelty").handlers:
+        configure_logging()
+    log.info("loading corpus and calibration...")
     app = App(build_scorer, user_file)
+    servers = _loopback_servers(host, port, make_handler(app))
     # With a warm embedding cache the model was never loaded; load it now in the background so
     # the first new text does not pay for it, without delaying startup.
-    threading.Thread(target=getattr(app.scorer.embedder, "warmup", lambda: None), daemon=True).start()
-    servers = _loopback_servers(host, port, make_handler(app))
-    print(f"loaded {app.admitted_count} saved user submission(s) from {user_file.name}")
-    print(f"open http://{host}:{port}  (embedder: {app.scorer.embedder.name}, Ctrl+C to stop)")
+    threading.Thread(target=_warmup, args=(app.scorer.embedder,), daemon=True).start()
+    log.info("%d saved user submission(s) in %s", app.admitted_count, user_file.name)
+    log.info("open http://%s:%d  (embedder: %s, Ctrl+C to stop)", host, port, app.scorer.embedder.name)
     for extra in servers[1:]:
         threading.Thread(target=extra.serve_forever, daemon=True).start()
     try:
         servers[0].serve_forever()
     except KeyboardInterrupt:
-        pass
+        log.info("shutting down")
     finally:
         for srv in servers:
             srv.server_close()

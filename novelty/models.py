@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .errors import ValidationError
 from .text import normalize
 
 MAX_FIXED_WORDS = 100
@@ -32,12 +33,19 @@ class FixedContent:
     text: str
 
     def __post_init__(self) -> None:
+        if not all(isinstance(v, str) for v in (self.id, self.title, self.text)):
+            raise ValidationError("fixed content id, title and text must be strings")
+        if not self.text.strip():
+            raise ValidationError("fixed content text is empty")
         words = len(self.text.split())
         if words > MAX_FIXED_WORDS:
-            raise ValueError(f"fixed content is {words} words; max is {MAX_FIXED_WORDS}")
+            raise ValidationError(f"fixed content is {words} words; max is {MAX_FIXED_WORDS}")
 
     @property
     def embedding_text(self) -> str:
+        """Title and text as one document (same layout as ``Submission.text``). The index embeds the
+        *prepared* article (``TextPreparer.prepare(title, text)``); this raw form is the article
+        vocabulary that spelling correction prefers."""
         return f"{self.title}\n\n{self.text}"
 
 
@@ -52,22 +60,24 @@ class Submission:
 
     def __post_init__(self) -> None:
         if not isinstance(self.headline, str) or not isinstance(self.body, str):
-            raise ValueError("headline and body must be strings")
+            raise ValidationError("headline and body must be strings")
         # Normalise before validating, so invisible characters cannot pad a body past the minimum.
         headline = " ".join(normalize(self.headline).split())
         body = normalize(self.body)
         if not headline:
-            raise ValueError("headline is required")
+            raise ValidationError("headline is required")
         if len(headline) > HEADLINE_MAX_CHARS:
-            raise ValueError(f"headline exceeds {HEADLINE_MAX_CHARS} characters")
+            raise ValidationError(f"headline exceeds {HEADLINE_MAX_CHARS} characters")
         if not BODY_MIN_CHARS <= len(body) <= BODY_MAX_CHARS:
-            raise ValueError(f"body must be {BODY_MIN_CHARS}-{BODY_MAX_CHARS} characters")
+            raise ValidationError(f"body must be {BODY_MIN_CHARS}-{BODY_MAX_CHARS} characters")
+        if self.id is not None and (not isinstance(self.id, str) or not self.id.strip()):
+            raise ValidationError("submission id must be a non-empty string")
         object.__setattr__(self, "headline", headline)
         object.__setattr__(self, "body", body)
         try:
             object.__setattr__(self, "stance", Stance(self.stance))
         except ValueError:
-            raise ValueError(f"stance must be one of {[s.value for s in Stance]}") from None
+            raise ValidationError(f"stance must be one of {[s.value for s in Stance]}") from None
 
     @property
     def text(self) -> str:
@@ -76,6 +86,11 @@ class Submission:
 
     @classmethod
     def from_dict(cls, d: dict) -> Submission:
+        if not isinstance(d, dict):
+            raise ValidationError(f"a submission must be an object, got {type(d).__name__}")
+        missing = [k for k in ("headline", "body", "stance") if k not in d]
+        if missing:
+            raise ValidationError(f"submission is missing field(s): {', '.join(missing)}")
         return cls(headline=d["headline"], body=d["body"], stance=d["stance"], id=d.get("id"))
 
 
@@ -92,7 +107,7 @@ class ScoreBreakdown:
     score: float  # final reward in [0, 1] = novelty * relevance_gate
     novelty: float  # [0, 1] = min(novelty signals) * product(modifier signals)
     semantic_novelty: float  # [0, 1], whole-text novelty vs. the corpus (robust z -> normal CDF)
-    clause_novelty: float | None  # [0, 1], most novel relevant clause; None for single-clause text
+    clause_novelty: float | None  # [0, 1], most novel relevant clause; None if exactly one clause is substantive
     raw_novelty: float  # uncalibrated whole-text distance to nearest neighbours
     stance_rarity: float  # [0, 1], 0 = most common stance in the corpus
     relevance: float  # [0, 1], margin / typical on-topic margin

@@ -5,164 +5,352 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Novelty Scorer</title>
 <style>
-  :root { --bg:#fafaf9; --fg:#1c1917; --muted:#78716c; --card:#fff; --line:#e7e5e4; --accent:#2563eb; --good:#16a34a; --bad:#dc2626; }
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --text: #111827; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #2f5bd3; --accent-text: #ffffff; --focus: #93b4ff;
+    --good: #15803d; --good-bg: #e8f5ec; --warn: #b45309; --warn-bg: #fdf3e3;
+    --bad: #b91c1c; --bad-bg: #fbeaea; --neutral: #4b5563; --neutral-bg: #eef0f3;
+    --radius: 10px; --shadow: 0 1px 2px rgba(17, 24, 39, .05);
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#1c1917; --fg:#f5f5f4; --muted:#a8a29e; --card:#292524; --line:#44403c; --accent:#60a5fa; --good:#4ade80; --bad:#f87171; }
+    :root {
+      --bg: #0f1115; --surface: #171a21; --text: #e6e8ec; --muted: #9aa3b2; --line: #2a2f3a;
+      --accent: #5b82f0; --focus: #3a5bc0;
+      --good: #4ade80; --good-bg: #13291c; --warn: #fbbf24; --warn-bg: #2d2412;
+      --bad: #f87171; --bad-bg: #2e1616; --neutral: #b3bac6; --neutral-bg: #232833;
+      --shadow: none;
+    }
   }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
-  main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
-  h1 { font-size:20px; margin:0 0 4px; }
-  .muted { color:var(--muted); font-size:13px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-top:16px; }
-  .article h2 { font-size:16px; margin:0 0 6px; }
-  .article p { margin:0; }
-  label { display:block; font-weight:600; font-size:13px; margin:12px 0 4px; }
-  input, textarea, select { width:100%; font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; }
-  textarea { min-height:90px; resize:vertical; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
-  button { font:inherit; border:1px solid var(--line); background:var(--bg); color:inherit; border-radius:6px; padding:7px 12px; cursor:pointer; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button:disabled { opacity:.5; cursor:wait; }
-  .examples button { font-size:12px; padding:3px 8px; }
-  .score { font-size:40px; font-weight:700; font-variant-numeric:tabular-nums; }
-  .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:4px 0 10px; }
-  .bar > div { height:100%; background:var(--accent); }
-  table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
-  td { padding:4px 0; border-bottom:1px solid var(--line); }
-  td:last-child { text-align:right; }
-  ul { margin:8px 0 0; padding-left:18px; font-size:13px; }
-  .error { color:var(--bad); }
-  .ok { color:var(--good); }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  header.top { border-bottom: 1px solid var(--line); background: var(--surface); }
+  header.top .wrap { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-top: 14px; padding-bottom: 14px; flex-wrap: wrap; }
+  .brand { font-weight: 650; font-size: 16px; letter-spacing: -.01em; }
+  .brand span { font-weight: 400; color: var(--muted); margin-left: 8px; font-size: 14px; }
+  .meta { color: var(--muted); font-size: 13px; }
+
+  /* Phone: article, form, result, examples. Desktop: result beside the input column. */
+  main.layout {
+    display: grid; gap: 20px; padding-top: 24px; padding-bottom: 24px; align-items: start;
+    grid-template-columns: minmax(0, 1fr); grid-template-areas: "article" "form" "result" "examples";
+  }
+  #article { grid-area: article; } #form { grid-area: form; } #result { grid-area: result; } #examples-card { grid-area: examples; }
+  @media (min-width: 960px) {
+    main.layout {
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-rows: auto auto 1fr;
+      grid-template-areas: "article result" "form result" "examples result";
+    }
+    #result { position: sticky; top: 20px; }
+  }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  h2 { font-size: 17px; line-height: 1.35; margin: 0 0 8px; }
+  .article p { margin: 0; color: var(--text); }
+
+  label, .label { display: block; font-weight: 600; font-size: 13px; margin: 16px 0 6px; }
+  .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type=text], textarea {
+    width: 100%; font: inherit; color: inherit; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  input[type=text]:focus, textarea:focus, button:focus-visible, .seg input:focus-visible + span {
+    outline: 3px solid var(--focus); outline-offset: 1px; border-color: var(--accent);
+  }
+  .seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg label { margin: 0; font-weight: 500; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; text-align: center; padding: 9px 4px; cursor: pointer; font-size: 14px; border-left: 1px solid var(--line); }
+  .seg label:first-child span { border-left: 0; }
+  .seg input:checked + span { background: var(--accent); color: var(--accent-text); }
+  @media (max-width: 420px) { .seg { grid-template-columns: repeat(2, minmax(0, 1fr)); } .seg label:nth-child(3) span { border-left: 0; } .seg label:nth-child(n+3) span { border-top: 1px solid var(--line); } }
+
+  .actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 600; font-size: 14px; border-radius: 8px; padding: 10px 16px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .55; cursor: progress; }
+  .actions button { flex: 1 1 180px; }
+  .link { border: 0; background: none; padding: 0; color: var(--muted); font-weight: 500; font-size: 13px; text-decoration: underline; text-underline-offset: 2px; }
+  .alert { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; background: var(--bad-bg); color: var(--bad); }
+
+  .examples-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .examples-grid h3 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  .example { display: block; width: 100%; text-align: left; font-weight: 500; padding: 10px 12px; margin-bottom: 8px; line-height: 1.4; }
+  .example:hover { border-color: var(--accent); }
+  .example small { display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+
+  .empty { color: var(--muted); margin: 0; }
+  .score-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .score { font-size: 44px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+  .score small { font-size: 16px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+  .badge { display: inline-block; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; }
+  .v-good { color: var(--good); background: var(--good-bg); }
+  .v-warn { color: var(--warn); background: var(--warn-bg); }
+  .v-bad { color: var(--bad); background: var(--bad-bg); }
+  .v-neutral { color: var(--neutral); background: var(--neutral-bg); }
+  .verdict-text { margin: 12px 0 18px; }
+  .metric { margin-bottom: 12px; }
+  .metric .field-row { font-size: 13px; }
+  .metric .field-row span:last-child { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .bar { height: 6px; background: var(--neutral-bg); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+  .bar div { height: 100%; background: var(--accent); border-radius: 3px; transition: width .25s ease; }
+  .similar { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 14px; }
+  .similar .eyebrow { margin-bottom: 4px; }
+  .note { margin-top: 14px; font-size: 14px; padding: 10px 12px; border-radius: 8px; }
+  details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+  summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  td { padding: 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:last-child { text-align: right; padding-left: 12px; white-space: nowrap; }
+  .formula { font-size: 13px; color: var(--muted); margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+  details ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+
+  footer { border-top: 1px solid var(--line); }
+  footer .wrap { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 14px; padding-bottom: 24px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Novelty Scorer</h1>
-  <div class="muted" id="meta">loading…</div>
-
-  <div class="card article">
-    <div class="muted">Fixed content</div>
-    <h2 id="title"></h2>
-    <p id="text"></p>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">Novelty Scorer<span>Rewards comments that add something new</span></div>
+    <div class="meta" id="meta" aria-live="polite">Loading&hellip;</div>
   </div>
+</header>
 
-  <form class="card" id="form">
-    <div class="muted">Try an example:</div>
-    <div class="row examples" id="examples"></div>
+<main class="wrap layout">
+    <article class="card article" id="article" aria-labelledby="article-title">
+      <p class="eyebrow">The article</p>
+      <h2 id="article-title"></h2>
+      <p id="article-text"></p>
+    </article>
 
-    <label for="headline">Headline</label>
-    <input id="headline" maxlength="120" required>
-    <label for="body">Body</label>
-    <textarea id="body" required></textarea>
-    <label for="stance">Stance</label>
-    <select id="stance"></select>
+    <form class="card" id="form" novalidate>
+      <p class="eyebrow">Your comment</p>
+      <div class="field-row"><label for="headline">Headline</label><span class="count" id="headline-count">0 / 120</span></div>
+      <input type="text" id="headline" maxlength="120" autocomplete="off" required>
+      <div class="field-row"><label for="body">Comment</label><span class="count" id="body-count">0 / 2000</span></div>
+      <textarea id="body" maxlength="2000" required></textarea>
+      <span class="label" id="stance-label">Stance</span>
+      <div class="seg" role="radiogroup" aria-labelledby="stance-label" id="stances"></div>
+      <div class="actions">
+        <button class="primary" type="submit" data-commit="false">Score</button>
+        <button type="submit" data-commit="true" title="Score it, then add it to the corpus so later comments are compared against it">Score and add to corpus</button>
+      </div>
+      <div class="alert" id="form-error" role="alert" hidden></div>
+    </form>
 
-    <div class="row">
-      <button class="primary" type="submit" data-commit="false">Score</button>
-      <button type="submit" data-commit="true" title="Score it, then add it to the corpus so later submissions are compared against it">Score &amp; add to corpus</button>
-      <button type="button" id="reset" title="Remove everything you added (data/user_submissions.json)">Reset my submissions</button>
-    </div>
-  </form>
+    <section class="card" id="result" aria-live="polite" aria-labelledby="result-title">
+      <p class="eyebrow" id="result-title">Result</p>
+      <p class="empty">Score a comment to see how new and how relevant it is. Pick an example to start.</p>
+    </section>
 
-  <div class="card" id="result" hidden></div>
+    <section class="card" id="examples-card" aria-labelledby="examples-title">
+      <p class="eyebrow" id="examples-title">Examples</p>
+      <div class="examples-grid" id="examples"></div>
+    </section>
 </main>
 
-<script>
-const $ = (id) => document.getElementById(id);
-let corpusSize = 0;
-let userCount = 0;
+<footer>
+  <div class="wrap">
+    <span id="model"></span>
+    <button type="button" class="link" id="reset">Reset my submissions</button>
+  </div>
+</footer>
 
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+<script>
+const STANCE_NAMES = { support: 'Support', oppose: 'Oppose', mixed: 'Mixed', undecided: 'Undecided' };
+const SIGNAL_NAMES = {
+  whole_text: 'Novelty of the whole comment', clause_coverage: 'Novelty of the best point',
+  duplicate: 'Copy check', quality: 'Content quality', specificity: 'Specificity',
+  stance: 'Stance rarity', relevance: 'Relevance gate',
+};
+const $ = (id) => document.getElementById(id);
+const BODY_MIN_CHARS = 20; // models.BODY_MIN_CHARS
+const NOVEL_MIN = 0.6; // mirrors tests/helpers.py
+const NOT_NOVEL_MAX = 0.25; // mirrors tests/helpers.py
+const state = { corpusSize: 0, userCount: 0 };
+const RESULT_HEADING = '<p class="eyebrow" id="result-title">Result</p>';
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const fmt = (x) => (typeof x === 'number' ? x.toFixed(2) : '–');
+
+function showCounts(payload) {
+  state.corpusSize = payload.corpus_size;
+  state.userCount = payload.user_count;
+  const added = state.userCount ? `, ${state.userCount} added by you` : '';
+  $('meta').textContent = `${state.corpusSize} comments in the corpus${added}`;
+}
+
+function updateCounts() {
+  $('headline-count').textContent = `${$('headline').value.length} / ${$('headline').maxLength}`;
+  $('body-count').textContent = `${$('body').value.length} / ${$('body').maxLength}`;
+}
+
+function selectedStance() {
+  const checked = document.querySelector('input[name=stance]:checked');
+  return checked ? checked.value : '';
+}
+
+function fill(example) {
+  $('headline').value = example.headline;
+  $('body').value = example.body;
+  const radio = document.querySelector(`input[name=stance][value="${example.stance}"]`);
+  if (radio) radio.checked = true;
+  updateCounts();
+  $('form-error').hidden = true;
+  $('headline').focus();
+}
 
 async function init() {
-  const ctx = await (await fetch('/api/context')).json();
-  corpusSize = ctx.corpus_size;
-  userCount = ctx.user_count;
-  $('title').textContent = ctx.fixed.title;
-  $('text').textContent = ctx.fixed.text;
-  $('stance').innerHTML = ctx.stances.map(s => `<option>${s}</option>`).join('');
-  updateMeta(ctx.embedder);
-  const labels = { novel_relevant: 'novel', duplicates: 'repeat', off_topic: 'off-topic' };
-  for (const [group, items] of Object.entries(ctx.probes)) {
-    for (const p of items) {
+  const res = await fetch('/api/context');
+  const ctx = await res.json();
+  if (!res.ok) throw new Error(ctx.error || 'Could not load the page data');
+  showCounts(ctx);
+  $('article-title').textContent = ctx.fixed.title;
+  $('article-text').textContent = ctx.fixed.text;
+  $('model').textContent = `Embedding model: ${ctx.embedder}`;
+
+  $('stances').innerHTML = ctx.stances.map((s, i) =>
+    `<label><input type="radio" name="stance" value="${esc(s)}"${i === 0 ? ' checked' : ''}><span>${esc(STANCE_NAMES[s] || s)}</span></label>`
+  ).join('');
+
+  const grid = $('examples');
+  for (const [stance, items] of Object.entries(ctx.examples || {})) {
+    const group = document.createElement('div');
+    group.innerHTML = `<h3>${esc(STANCE_NAMES[stance] || stance)}</h3>`;
+    for (const ex of items) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = `${labels[group] || group}: ${p.headline.slice(0, 28)}…`;
-      b.onclick = () => { $('headline').value = p.headline; $('body').value = p.body; $('stance').value = p.stance; };
-      $('examples').appendChild(b);
+      b.className = 'example';
+      b.innerHTML = `<small>${esc(ex.label)}</small>${esc(ex.headline)}`;
+      b.addEventListener('click', () => fill(ex));
+      group.appendChild(b);
     }
+    grid.appendChild(group);
   }
 }
 
-function updateMeta(embedder) {
-  if (embedder) updateMeta.embedder = embedder;
-  const added = userCount ? ` (${userCount} added by you, saved in data/user_submissions.json)` : '';
-  $('meta').textContent = `${corpusSize} submissions in corpus${added} · ${updateMeta.embedder}`;
+function clientError() {
+  if (!$('headline').value.trim()) return 'Add a headline.';
+  if ($('body').value.trim().length < BODY_MIN_CHARS) return `The comment needs at least ${BODY_MIN_CHARS} characters.`;
+  if (!selectedStance()) return 'Choose a stance.';
+  return null;
 }
 
-$('form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const commit = e.submitter?.dataset.commit === 'true';
+async function submit(commit) {
+  const problem = clientError();
+  const error = $('form-error');
+  if (problem) { error.textContent = problem; error.hidden = false; return; }
+  error.hidden = true;
   const buttons = $('form').querySelectorAll('button');
-  buttons.forEach(b => b.disabled = true);
+  buttons.forEach(b => { b.disabled = true; });
   try {
     const res = await fetch('/api/score', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ headline: $('headline').value, body: $('body').value, stance: $('stance').value, commit }),
+      body: JSON.stringify({ headline: $('headline').value, body: $('body').value, stance: selectedStance(), commit }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    corpusSize = data.corpus_size;
-    userCount = data.user_count;
-    updateMeta();
-    render(data.result, commit);
+    if (!res.ok) throw new Error(data.error + (data.request_id ? ` (request ${data.request_id})` : ''));
+    showCounts(data);
+    render(data.result, commit, data.saved);
+    if (window.matchMedia('(max-width: 959px)').matches) $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
-    $('result').hidden = false;
-    $('result').innerHTML = `<span class="error">${esc(err.message)}</span>`;
+    error.textContent = err.message;
+    error.hidden = false;
   } finally {
-    buttons.forEach(b => b.disabled = false);
+    buttons.forEach(b => { b.disabled = false; });
   }
-});
-
-$('reset').addEventListener('click', async () => {
-  if (!confirm('Remove all submissions you added to the corpus?')) return;
-  const data = await (await fetch('/api/reset', { method: 'POST' })).json();
-  corpusSize = data.corpus_size;
-  userCount = data.user_count;
-  updateMeta();
-  $('result').hidden = true;
-});
-
-function render(r, committed) {
-  const pct = (x) => `${Math.round(x * 100)}%`;
-  const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v ?? '—')}</td></tr>`;
-  const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(n.headline || '')}</li>`).join('');
-  $('result').hidden = false;
-  $('result').innerHTML = `
-    <div class="muted">Reward</div>
-    <div class="score">${r.score.toFixed(3)}</div>
-    <div class="bar"><div style="width:${pct(r.score)}"></div></div>
-    <table>
-      ${row('Novelty', r.novelty)}
-      ${row('Whole-text novelty', r.semantic_novelty)}
-      ${row('Best clause novelty', r.clause_novelty)}
-      ${row('Relevance', r.relevance)}
-      ${row('Relevance gate', r.relevance_gate)}
-      ${row('Relevance margin', r.relevance_margin ?? '—')}
-      ${row('Stance rarity', r.stance_rarity)}
-      ${row('Near-duplicate of', r.near_duplicate_of || '—')}
-    </table>
-    <ul>${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-    <div class="muted" style="margin-top:10px">Nearest existing submissions</div>
-    <ul>${nearest}</ul>
-    ${committed ? (r.admitted
-      ? `<p class="ok">Added to the corpus and saved. Submitting the same idea again will now score lower.</p>`
-      : `<p class="error">Not added to the corpus: only relevant, non-duplicate, substantive submissions are admitted.</p>`) : ''}`;
 }
 
-init().catch(err => { $('meta').innerHTML = `<span class="error">${esc(err.message)}</span>`; });
+function verdict(r) {
+  const has = (text) => r.reasons.some(x => x.includes(text));
+  if (r.near_duplicate_of === 'article') return ['v-neutral', 'Restates the article', 'It repeats the article itself, so there is nothing new to reward.'];
+  if (r.near_duplicate_of) return ['v-neutral', 'Copy of an existing comment', `It is a near-copy of comment ${r.near_duplicate_of}.`];
+  if (has('not in a supported language') || has('no assessable English')) return ['v-neutral', 'Not assessable', 'Only English text can be scored.'];
+  if (r.signals.quality === 0) return ['v-neutral', 'No clear statement', 'It does not make a point that can be compared with other comments.'];
+  if (r.relevance_gate === 0) return ['v-bad', 'Off-topic', 'It is not about the article, so it earns nothing however new it is.'];
+  if (r.score >= NOVEL_MIN) return ['v-good', 'New and relevant', 'It says something the existing comments have not, and it stays on topic.'];
+  if ((r.signals.specificity ?? 1) < 1) return ['v-warn', 'Too general', 'It does not make a specific enough point to count as new.'];
+  if (r.score >= NOT_NOVEL_MAX) return ['v-warn', 'Partly new', 'It adds a little beyond what has already been said.'];
+  return ['v-neutral', 'Already said', 'Existing comments already make this point.'];
+}
+
+function metric(name, value) {
+  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
+  return `<div class="metric"><div class="field-row"><span>${name}</span><span>${fmt(value)}</span></div>
+    <div class="bar" role="img" aria-label="${name} ${fmt(value)}"><div style="width:${pct}%"></div></div></div>`;
+}
+
+function render(r, committed, saved) {
+  const [cls, title, text] = verdict(r);
+  // Only worth showing when there is something to compare: not for off-topic or unassessable text.
+  const comparable = r.relevance_gate > 0 || r.near_duplicate_of;
+  const nearest = comparable ? (r.nearest.find(n => n.id === r.near_duplicate_of) || r.nearest.find(n => n.headline) || r.nearest[0]) : null;
+  let note = '';
+  if (committed) {
+    if (!r.admitted) note = `<div class="note v-neutral">Not added to the corpus: only relevant, original comments are added.</div>`;
+    else if (saved === false) note = `<div class="note v-bad">Added to the corpus, but the server could not save it to disk.</div>`;
+    else note = `<div class="note v-good">Added to the corpus. The same idea will now score lower.</div>`;
+  }
+  const signals = Object.entries(r.signals).map(([k, v]) =>
+    `<tr><td>${esc(SIGNAL_NAMES[k] || k)}</td><td>${fmt(v)}</td></tr>`).join('');
+  const neighbours = r.nearest.map(n =>
+    `<li>${esc(n.id)} (similarity ${fmt(n.similarity)})${n.headline ? `: ${esc(n.headline)}` : ''}</li>`).join('');
+  const reasons = r.reasons.map(x => `<li>${esc(x)}</li>`).join('');
+
+  $('result').innerHTML = `
+    ${RESULT_HEADING}
+    <div class="score-row">
+      <div class="score">${fmt(r.score)}<small> / 1.00</small></div>
+      <span class="badge ${cls}">${esc(title)}</span>
+    </div>
+    <p class="verdict-text">${esc(text)}</p>
+    ${metric('Novelty', r.novelty)}
+    ${metric('Relevance', r.relevance)}
+    ${nearest ? `<div class="similar"><p class="eyebrow">Most similar comment</p>${esc(nearest.headline || nearest.id)}
+      <span class="count"> &middot; similarity ${fmt(nearest.similarity)}</span></div>` : ''}
+    ${note}
+    <details>
+      <summary>Details</summary>
+      <p class="formula">score ${fmt(r.score)} = novelty ${fmt(r.novelty)} &times; relevance gate ${fmt(r.relevance_gate)}</p>
+      <table>${signals}</table>
+      <p class="eyebrow" style="margin-top:14px">Nearest comments</p><ul>${neighbours}</ul>
+      ${reasons ? `<p class="eyebrow" style="margin-top:14px">Notes</p><ul>${reasons}</ul>` : ''}
+    </details>`;
+}
+
+$('form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submit(e.submitter?.dataset.commit === 'true');
+});
+$('body').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(false); }
+});
+$('headline').addEventListener('input', updateCounts);
+$('body').addEventListener('input', updateCounts);
+$('reset').addEventListener('click', async () => {
+  if (!confirm('Remove every comment you added to the corpus?')) return;
+  const res = await fetch('/api/reset', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) { alert(`Reset failed: ${data.error}`); return; }
+  showCounts(data);
+  $('result').innerHTML = `${RESULT_HEADING}<p class="empty">Your submissions were removed.</p>`;
+});
+
+init().catch(err => {
+  $('meta').textContent = 'Could not load';
+  $('form-error').textContent = err.message;
+  $('form-error').hidden = false;
+});
 </script>
 </body>
 </html>

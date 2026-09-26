@@ -1,39 +1,33 @@
 """Attacks on the scorer, each one a regression test.
 
-Every case here was run against the earlier pipeline first; the comment on each says what it
-scored before the defence that now stops it. Positive controls at the bottom make sure the
-defences did not also kill genuine novelty.
+Every case here was run against the earlier pipeline first and is kept as a regression test.
+A ``# was:`` comment records what a case scored before the defence that now stops it;
+README.md's "Adversarial testing" section has the full before/after table. Positive controls
+at the bottom make sure the defences did not also kill genuine novelty.
 """
 
 import itertools
 
 import pytest
 
+from helpers import NOT_NOVEL_MAX, UNREWARDED, assert_novel, corpus_entry
 from novelty.data import load_fixed_content
 from novelty.models import Stance, Submission
 
-UNREWARDED = 0.01
-NOT_NOVEL_MAX = 0.25
-NOVEL_MIN = 0.6
-
 CYRILLIC = str.maketrans({"a": "а", "e": "е", "o": "о", "p": "р", "c": "с"})
-
-
-def _by_id(scorer, cid):
-    return next(s for s in scorer.corpus if s.id == cid)
 
 
 # ---------------------------------------------------------------- copy evasion
 
 
 def test_lookalike_letter_copy_is_caught(scorer):
-    c01 = _by_id(scorer, "c01")  # was: dup check blind, rewarded only by luck of the relevance gate
+    c01 = corpus_entry(scorer, "c01")  # was: dup check blind, rewarded only by luck of the relevance gate
     r = scorer.score(Submission(headline=c01.headline.translate(CYRILLIC), body=c01.body.translate(CYRILLIC), stance="oppose"))
     assert r.near_duplicate_of == "c01" and r.score == 0.0
 
 
 def test_zero_width_character_copy_is_caught(scorer):
-    c01 = _by_id(scorer, "c01")
+    c01 = corpus_entry(scorer, "c01")
     r = scorer.score(Submission(headline=c01.headline, body="​".join(c01.body), stance="oppose"))
     assert r.near_duplicate_of == "c01" and r.score == 0.0
 
@@ -44,7 +38,7 @@ def test_invisible_characters_cannot_pad_body_past_minimum_length():
 
 
 def test_concatenating_existing_comments_is_a_copy(scorer):
-    body = _by_id(scorer, "c01").body + " " + _by_id(scorer, "c20").body
+    body = corpus_entry(scorer, "c01").body + " " + corpus_entry(scorer, "c20").body
     assert scorer.score(Submission(headline="Parking and cost", body=body, stance="oppose")).score == 0.0
 
 
@@ -169,18 +163,18 @@ def test_flooding_the_corpus_with_variants_does_not_inflate_other_scores(scorer,
     for pid in before:
         assert abs(after[pid] - before[pid]) <= 0.15, (pid, before[pid], after[pid])
     for s in probes["novel_relevant"]:
-        assert after[s.id] >= NOVEL_MIN
+        assert_novel(scorer, s)
 
 
-def test_rejected_submissions_never_enter_the_corpus(scorer):
-    c01 = _by_id(scorer, "c01")
+def test_rejected_submissions_never_enter_the_corpus(scorer, corpus_size):
+    c01 = corpus_entry(scorer, "c01")
     results = [
         scorer.submit(Submission(headline=c01.headline, body=c01.body, stance="support")),  # copy
         scorer.submit(Submission(headline="park", body="park " * 40, stance="support")),  # no content
         scorer.submit(Submission(headline="Bread", body="Rye flour makes sourdough starters much more lively.", stance="support")),
     ]
     assert [r.admitted for r in results] == [False, False, False]
-    assert len(scorer.corpus) == 50
+    assert len(scorer.corpus) == corpus_size
 
 
 # ---------------------------------------------------------------- positive controls
@@ -188,14 +182,14 @@ def test_rejected_submissions_never_enter_the_corpus(scorer):
 
 def test_genuinely_novel_ideas_survive_every_defence(scorer, probes):
     for sub in probes["novel_relevant"]:
-        r = scorer.score(sub)
-        assert r.score >= NOVEL_MIN and r.clause_novelty >= NOVEL_MIN, (sub.id, r)
+        r = assert_novel(scorer, sub)
+        if r.score > 0:
+            assert r.clause_novelty >= 0.6, (sub.id, r)
 
 
 def test_novel_idea_with_a_friendly_opener_is_still_rewarded(scorer):
-    r = scorer.score(Submission(
+    assert_novel(scorer, Submission(
         headline="Solar canopies over the shuttle lot",
         body="Great to see this passing. The outer shuttle lot is acres of bare asphalt; solar canopies would "
              "shade parked cars and the power they generate could help pay for park maintenance.",
-        stance=Stance.SUPPORT))
-    assert r.score >= 0.5, r
+        stance=Stance.SUPPORT), minimum=0.5)

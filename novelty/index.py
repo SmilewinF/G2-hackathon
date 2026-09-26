@@ -12,6 +12,7 @@ the one event after which previously computed lexical similarities are stale.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from typing import Sequence
@@ -19,10 +20,13 @@ from typing import Sequence
 import numpy as np
 
 from .embeddings import Embedder
+from .errors import CalibrationError, ValidationError
 from .lexical import SparseVec, SparseVectors, TfidfModel, count
 from .models import FixedContent, Submission
 from .preparation import EnglishPreparer, PreparedText, TextPreparer
 from .text import shingles
+
+log = logging.getLogger(__name__)
 
 ARTICLE_ID = "article"
 FULL_LEXICAL_TOKENS = 6  # content tokens at which TF-IDF evidence gets its full hybrid weight (swept: 4-10)
@@ -35,7 +39,7 @@ def unit(v: np.ndarray) -> np.ndarray:
 @dataclass(frozen=True)
 class Entry:
     id: str
-    text: str  # prepared analysis text (normalised, spell-corrected, English only), not the display text
+    text: str  # PreparedText.analysis_text, not the display text
     submission: Submission | None  # None for the fixed content
     on_topic: bool  # contributes to the topic centroid
     shingles: frozenset[str]
@@ -54,7 +58,7 @@ class Analysis:
 
     submission: Submission
     prepared: PreparedText
-    text: str  # prepared text
+    text: str  # PreparedText.analysis_text, as stored in Entry.text
     vec: np.ndarray  # dense, whole text
     sims: np.ndarray  # hybrid similarity to every entry
     content_vec: np.ndarray | None  # dense, substantive body clauses only (None if there are none)
@@ -101,9 +105,10 @@ class ReferenceIndex:
         dense_weight: float,
         preparer: TextPreparer | None = None,
         refit_growth: float = 0.1,
+        relevance_negatives: Sequence[Submission] = (),
     ) -> None:
         if not off_topic_anchors:
-            raise ValueError("at least one off-topic anchor is required to calibrate relevance")
+            raise CalibrationError("at least one off-topic anchor is required to calibrate relevance")
         self.fixed = fixed
         self.embedder = embedder
         self.dense_weight = dense_weight
@@ -113,6 +118,11 @@ class ReferenceIndex:
         anchor_vecs = embedder.embed(list(off_topic_anchors))
         self.generic_vec = unit(anchor_vecs.mean(axis=0))
         dim = anchor_vecs.shape[1]
+        # Content vectors (prepared and embedded exactly like a submission's substantive body) of
+        # the generic anchors and of the article-specific hard negatives: same-town comments that
+        # are NOT about this article. The learned relevance signal trains on them.
+        self.anchor_content = self._content_vectors([(".", a) for a in off_topic_anchors], dim)
+        self.negative_content = self._content_vectors([(n.headline, n.body) for n in relevance_negatives], dim)
 
         self.entries: list[Entry] = []
         self._by_id: dict[str, int] = {}
@@ -131,6 +141,15 @@ class ReferenceIndex:
         prep = self.preparer.prepare(fixed.title, fixed.text)
         self._append([(ARTICLE_ID, None, prep, True)])
 
+    def _content_vectors(self, pairs: Sequence[tuple[str, str]], dim: int) -> np.ndarray:
+        if not pairs:
+            return np.zeros((0, dim), dtype=np.float32)
+        texts = []
+        for headline, body in pairs:
+            prep = self.preparer.prepare(headline, body)
+            texts.append(_content_text(prep.clauses, prep.substantive) or prep.analysis_text)
+        return self.embedder.embed(texts)
+
     # ------------------------------------------------------------------ writing
 
     def add(self, subs: Sequence[Submission], on_topic: bool = True) -> range:
@@ -138,9 +157,9 @@ class ReferenceIndex:
         batch_ids: set[str] = set()
         for sub in subs:
             if sub.id is None:
-                raise ValueError("submissions added to the index need an id")
+                raise ValidationError("submissions added to the index need an id")
             if sub.id in self._by_id or sub.id in batch_ids:
-                raise ValueError(f"duplicate submission id {sub.id!r}")
+                raise ValidationError(f"duplicate submission id {sub.id!r}")
             batch_ids.add(sub.id)
         start = len(self.entries)
         self._append([(sub.id, sub, self.preparer.prepare(sub.headline, sub.body), on_topic) for sub in subs])
@@ -175,14 +194,16 @@ class ReferenceIndex:
                 self.clause_owner.append(idx)
                 self.clause_substantive.append(ok)
 
+        self._sync_sparse()
+
+    def _sync_sparse(self) -> None:
+        """Vectorise the counts that have no sparse vector yet; after a TF-IDF refit, all of them."""
         if self.tfidf.needs_refit:
             self.tfidf.refit()
+            log.debug("TF-IDF refit at %d entries (version %d)", len(self.entries), self.tfidf.version)
             self._doc_sparse, self._clause_sparse = SparseVectors(), SparseVectors()
-            self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts)
-            self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts)
-        else:
-            self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts[len(self._doc_sparse):])
-            self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts[len(self._clause_sparse):])
+        self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts[len(self._doc_sparse):])
+        self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts[len(self._clause_sparse):])
 
     # ------------------------------------------------------------------ reading
 
@@ -223,7 +244,9 @@ class ReferenceIndex:
         return np.array(self._on_topic, dtype=bool)
 
     def hybrid(self, dense: np.ndarray, lexical: np.ndarray, lexical_confidence: float = 1.0) -> np.ndarray:
-        """``lexical_confidence`` < 1 shifts weight to the dense term for very short queries,
+        """Blend of embedding and TF-IDF similarity: ``dense_weight`` x dense + the rest x lexical.
+
+        ``lexical_confidence`` < 1 shifts weight to the dense term for very short queries,
         where a single rare word would otherwise dominate the TF-IDF cosine."""
         lw = (1.0 - self.dense_weight) * lexical_confidence
         return (1.0 - lw) * dense + lw * lexical
@@ -255,6 +278,7 @@ class ReferenceIndex:
         return vecs @ unit(topic) - vecs @ self.generic_vec
 
     def analyze(self, sub: Submission) -> Analysis:
+        """Prepare, embed and compare one submission with every entry, without adding it to the index."""
         prep = self.preparer.prepare(sub.headline, sub.body)
         cl, subst, text = prep.clauses, prep.substantive, prep.analysis_text
         content = _content_text(cl, subst)
@@ -263,6 +287,7 @@ class ReferenceIndex:
         clause_vecs = vecs[2 if content else 1 :]
         doc = count(text)
         lexical = self._doc_sparse.dot_all(self.tfidf.vector(doc))
+        lexical_confidence = min(1.0, sum(doc.values()) / FULL_LEXICAL_TOKENS)
         clause_lex = [self._doc_sparse.dot_all(self.tfidf.vector(count(c))) for c in cl]
         dense = self.dense
         return Analysis(
@@ -270,7 +295,7 @@ class ReferenceIndex:
             prepared=prep,
             text=text,
             vec=vec,
-            sims=self.hybrid(dense @ vec, lexical, min(1.0, sum(doc.values()) / FULL_LEXICAL_TOKENS)),
+            sims=self.hybrid(dense @ vec, lexical, lexical_confidence),
             content_vec=vecs[1] if content else None,
             clauses=cl,
             substantive=subst,

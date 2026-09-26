@@ -47,7 +47,7 @@ def test_probes_and_anchors_are_not_in_the_corpus():
     """Novel and off-topic probes are unseen. (Duplicate probes are derived from the corpus on purpose.)"""
     corpus_text = {s.text for s in load_corpus()}
     anchors = set(load_off_topic_anchors())
-    for group in ("novel_relevant", "off_topic"):
+    for group in ("novel_relevant", "off_topic", "off_topic_adjacent"):
         for p in load_probes()[group]:
             text = Submission.from_dict(p).text
             assert text not in corpus_text

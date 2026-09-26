@@ -1,0 +1,509 @@
+{
+ "_comment": "Training hard negatives for the relevance gate: same-town comments that are NOT about this article, written by an independent author and confirmed off-topic by a blind annotator. Topics: transit, library/schools, utilities, other council business, other parks/garages, unrelated businesses/events, roads, nature/outdoors. Never used for evaluation.",
+ "items": [
+  {
+   "id": "hn01",
+   "topic": "Riverton transit and buses",
+   "headline": "Route 3 is late every single morning",
+   "body": "I catch the 7:15 Route 3 at Maple and Cedar and it has not been on time once this month. Twice it just never showed up. I've been late to work three times and my supervisor is losing patience. Riverton Transit needs to fix the schedule or add a second bus at rush hour.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn02",
+   "topic": "Riverton transit and buses",
+   "headline": "New bus shelters on Broad Street are great",
+   "body": "Whoever pushed for the new heated bus shelters along Broad Street, thank you. Waiting for the 9 in January used to be miserable. Now there's a bench, a roof and a screen that tells you when the next bus is actually coming.",
+   "stance": "support"
+  },
+  {
+   "id": "hn03",
+   "topic": "Riverton transit and buses",
+   "headline": "Fare jump to $2.50 is too steep at once",
+   "body": "I understand Riverton Transit's costs have gone up, but raising the fare from $1.75 to $2.50 in one step is a lot for people who ride twice a day. Could they phase it in over two years, or at least keep the discounted monthly pass for students and seniors?",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn04",
+   "topic": "Riverton transit and buses",
+   "headline": "Anyone tried the on-demand van yet?",
+   "body": "The transit authority started that app-based microtransit van in the north end last month. Has anyone actually used it? I'm curious whether it shows up in a reasonable time before I think about giving up our second car.",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn05",
+   "topic": "Riverton transit and buses",
+   "headline": "Keep the bus transfer point central",
+   "body": "Transit wants to relocate the main transfer station from downtown out to the old rail yard. That adds almost a mile of walking for everyone who changes buses there, and a lot of those riders are elderly or carrying groceries. Moving it makes the whole system worse.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn06",
+   "topic": "Riverton transit and buses",
+   "headline": "Bring back Sunday buses",
+   "body": "Riverton hasn't had Sunday bus service since 2020. Church, shift work, grocery shopping, visiting family in the hospital, all of that happens on Sundays too. Please restore it.",
+   "stance": "support"
+  },
+  {
+   "id": "hn07",
+   "topic": "Riverton transit and buses",
+   "headline": "bus drivers deserve better",
+   "body": "my neighbor drives for riverton transit and says theyre short like 15 drivers. no wonder routes keep getting cancelled. pay them more and maybe the buses will actually run lol",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn08",
+   "topic": "Riverton transit and buses",
+   "headline": "Bike racks on the buses changed my commute",
+   "body": "Since they put bike racks on the front of every Riverton bus, I ride the 12 to the community college and bike the last mile. It saves me about forty minutes a day. More routes should connect to the new bike lanes on the west side.",
+   "stance": "support"
+  },
+  {
+   "id": "hn09",
+   "topic": "Riverton transit and buses",
+   "headline": "Don't cut the commuter express",
+   "body": "The regional board plans to cut the Riverton-to-capital express to three trips a day. For those of us who work in the city, that is the difference between keeping our jobs and having to buy a car we can't afford. Please reconsider.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn10",
+   "topic": "Riverton library and schools",
+   "headline": "Riverton High robotics team heads to state!",
+   "body": "Huge congratulations to the Riverton High robotics club for qualifying for the state championship. Those kids built their robot in a borrowed classroom with donated parts. They're raising money for the trip, so check the booster club page if you can chip in.",
+   "stance": "support"
+  },
+  {
+   "id": "hn11",
+   "topic": "Riverton library and schools",
+   "headline": "Stop the plan to close Lincoln Elementary",
+   "body": "The school board wants to close Lincoln Elementary and bus those kids across town. Lincoln is the only school the Northside kids can walk to. Consolidation might save money on paper, but it will cost families far more in time and safety.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn12",
+   "topic": "Riverton library and schools",
+   "headline": "Fine-free library, good idea?",
+   "body": "Riverton Public Library is going fine-free in January. I get the argument that fines keep poorer families away, but I worry some books will just never come back. Maybe try it for a year and publish the numbers?",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn13",
+   "topic": "Riverton library and schools",
+   "headline": "Later start at the middle school",
+   "body": "The district is proposing to move the middle school start from 7:40 to 8:30. I've read the sleep research and it makes sense, but I have no idea how I'd get to work on time if drop-off moves that late. Is there going to be a before-school program?",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn14",
+   "topic": "Riverton library and schools",
+   "headline": "Library as a cooling center worked",
+   "body": "During last week's heat wave the main library stayed open until 9pm as a cooling center. My elderly neighbor spent three afternoons there reading magazines in the air conditioning. Please make this a regular summer policy.",
+   "stance": "support"
+  },
+  {
+   "id": "hn15",
+   "topic": "Riverton library and schools",
+   "headline": "Pickup line at Oakwood is dangerous",
+   "body": "Every afternoon the pickup line at Oakwood Elementary backs up onto Harmon Road because there's no parking lot for parents. Cars are stopped in a live traffic lane. Someone is going to get hurt. The district needs staggered dismissal or a crossing guard.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn16",
+   "topic": "Riverton library and schools",
+   "headline": "Thank you, Mrs. Delgado",
+   "body": "My son had Mrs. Delgado for fourth grade at Riverside Elementary and she just retired after 34 years. She taught half this town to read. If you had her, go sign the card at the front office this week.",
+   "stance": "support"
+  },
+  {
+   "id": "hn17",
+   "topic": "Riverton library and schools",
+   "headline": "Voting no on the $60 million school bond",
+   "body": "The $60 million bond for a brand new high school is too much. The current building has problems, sure, but the district's own study said a renovation would cost about half. I'll be voting no in November unless they bring back the cheaper option.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn18",
+   "topic": "Riverton library and schools",
+   "headline": "Makerspace needs evening hours",
+   "body": "The 3D printers and sewing machines in the library makerspace are amazing, but it's only open Tuesday and Thursday afternoons, when most working adults can't get there. Evening or Saturday hours please.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn19",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Water bill up 22 percent with no warning",
+   "body": "Just got my quarterly water bill and it's up 22 percent from last year. Nobody told us the rates were changing. The utility board should have to hold a public hearing and send notices before hikes like this.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn20",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Lead pipe replacement cost on homeowners",
+   "body": "Glad the city is finally replacing lead service lines, but homeowners are being asked to pay $3,000 for the part on their own property. Plenty of families on the east side can't afford that. Is there any assistance program?",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn21",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Curbside compost pilot is working",
+   "body": "We signed up for the curbside compost pilot in Hillcrest and our trash is down to one bag a week. The bins are easy and pickup has been reliable. Hope Public Works expands it citywide next year.",
+   "stance": "support"
+  },
+  {
+   "id": "hn22",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Another boil water notice",
+   "body": "Third boil water notice this year on the west side. My kids are brushing their teeth with bottled water again. At what point does someone at the treatment plant get held accountable?",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn23",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Sewer smell near the River Road pump station",
+   "body": "Is anyone else noticing a strong sewer smell near the River Road pump station in the evenings? Not sure if it's a malfunction or just the heat. Has anybody called it in?",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn24",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Garbage trucks at 5am?!",
+   "body": "The new hauler contract means the trash trucks now come down our street at 5am. Beeping, banging, bins slammed down, the works. Whoever negotiated this contract clearly doesn't live on a residential street.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn25",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "What is the new stormwater fee for?",
+   "body": "My utility bill now has a 'stormwater fee' line on it. I don't necessarily object if it pays to fix the flooding on Birch Street, but the council passed it with almost no explanation. Where does that money actually go?",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn26",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "Kudos to the water crew",
+   "body": "Water main broke outside our house at 11pm Friday and the city crew had it fixed by 4am. In the pouring rain. Those folks don't get enough credit.",
+   "stance": "support"
+  },
+  {
+   "id": "hn27",
+   "topic": "Riverton water, sewer, trash and utility rates",
+   "headline": "9 percent power rate hike hits seniors hard",
+   "body": "Riverton Municipal Power wants a 9 percent rate increase to pay for a new substation. Seniors on my street are already choosing between running the air conditioning and buying groceries in August. Spread the cost over more years.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn28",
+   "topic": "Other Riverton council business",
+   "headline": "Council voting itself a raise",
+   "body": "The council is voting on a 12 percent pay raise for its own members next month. Maybe they deserve it, they haven't had one since 2015, but the timing is terrible with everyone else's bills going up.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn29",
+   "topic": "Other Riverton council business",
+   "headline": "Deny the Mill Road rezoning",
+   "body": "The request to rezone the farmland on Mill Road for a 300-home subdivision should be denied. The roads out there are two lanes and the schools are already over capacity. The planning commission hearing is on the 14th if you want to speak.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn30",
+   "topic": "Other Riverton council business",
+   "headline": "Where do the Ward 3 candidates stand?",
+   "body": "Two people are running for the open Ward 3 council seat and neither has a website or a flyer I can find. Anyone know where they stand on public safety and housing? I'd like to vote informed for once.",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn31",
+   "topic": "Other Riverton council business",
+   "headline": "Good call on short-term rental limits",
+   "body": "Good on the council for finally capping short-term rentals in residential neighborhoods. Half the houses on my block were Airbnbs and it felt like living next to a hotel. Maybe now some families can move back in.",
+   "stance": "support"
+  },
+  {
+   "id": "hn32",
+   "topic": "Other Riverton council business",
+   "headline": "Budget priorities are off",
+   "body": "The proposed city budget adds $2 million for new police vehicles while cutting youth programs. I'd rather see that money keep the rec center open in the evenings, which prevents more crime than another SUV ever will.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn33",
+   "topic": "Other Riverton council business",
+   "headline": "Backyard chickens, again",
+   "body": "The backyard chicken ordinance is up for a vote again. I'm fine with hens, but the rule should cap it at six birds and ban roosters outright. My neighbor's rooster starts at 4:30 every morning.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn34",
+   "topic": "Other Riverton council business",
+   "headline": "What happened to the south side fire station?",
+   "body": "Two years ago the council said it would build a new fire station on the south side to cut response times, which are the worst in the city. Now I can't find it anywhere in this year's capital budget. Was it cancelled, delayed or moved? It would be nice if someone on the council just posted an update instead of leaving us guessing.",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn35",
+   "topic": "Other Riverton council business",
+   "headline": "Dispensary across from the soccer fields",
+   "body": "Council approved a cannabis dispensary permit right across from the youth soccer fields on Garfield. Legal is legal, fine, but there were plenty of other locations available along the highway.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn36",
+   "topic": "Other Riverton council business",
+   "headline": "Thanks for livestreaming meetings",
+   "body": "Thank you to the council for livestreaming meetings now. I work evenings and can finally follow what's happening at city hall.",
+   "stance": "support"
+  },
+  {
+   "id": "hn37",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Hospital garage fees are outrageous",
+   "body": "Riverton General charges $18 a day to park in its garage. My mother is in for chemo three days a week. Patients and families shouldn't be paying that much just to get care.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn38",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Millbrook's riverfront park is worth the drive",
+   "body": "Drove over to Millbrook on Saturday to see their new riverfront park. The splash pad was packed, there are grills, shaded picnic tables and a little amphitheater. Nice day trip if you have kids.",
+   "stance": "support"
+  },
+  {
+   "id": "hn39",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Train station lot full by 7:10",
+   "body": "The commuter lot at the Riverton train station is full by 7:10 most weekdays. I'd take the train more if I could count on a space. A permit system or a second level would help a lot.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn40",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Cedar Park playground still fenced off",
+   "body": "The playground at Cedar Park on the north side has been fenced off for eight months waiting for new equipment. The parks department keeps saying 'soon.' Our kids are growing up waiting for it.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn41",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Mall parking lot is pitch dark",
+   "body": "Half the lights in the Riverton Crossing mall parking lot have been out for weeks. Walking to my car after a closing shift is sketchy. Mall management says it's the city's problem and the city says it's the mall's.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn42",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Where to park for jury duty in Fairview?",
+   "body": "Does anyone know where you're supposed to park for jury duty at the county courthouse in Fairview? The letter just says 'use public parking' and I couldn't find any last time.",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn43",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Lakeview Park pickleball courts are great",
+   "body": "The new pickleball courts at Lakeview Park are fantastic. Six courts, lights until 10, and people are really friendly about rotating in. Come out Tuesday nights for open play.",
+   "stance": "support"
+  },
+  {
+   "id": "hn44",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Game-night parking is wrecking our street",
+   "body": "Whenever there's a game at Memorial Stadium, the neighborhood around it turns into one big parking lot. People block driveways and leave trash on our lawns. I'm glad the team is doing well, but the city should either run residential permit parking on game nights or make the stadium lot cheaper so fans actually use it.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn45",
+   "topic": "Parks, garages or parking elsewhere",
+   "headline": "Westbrook dog park not worth it",
+   "body": "We drove to the dog park in Westbrook since there's no off-leash area on Riverton's south side. It's basically a mud pit, the water fountain doesn't work and the gate doesn't latch. Save yourself the gas.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn46",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Rosa's Taqueria is back!",
+   "body": "Rosa's reopened after the kitchen fire and the carnitas are as good as ever. Line was out the door at lunch. Go support them, they had a rough year.",
+   "stance": "support"
+  },
+  {
+   "id": "hn47",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Harvest Festival was fun but the lines, wow",
+   "body": "The Riverton Harvest Festival at the fairgrounds was great this year, especially the pie contest and the bluegrass stage. But the food lines were 45 minutes long. Next year they need twice as many vendors or a bigger layout.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn48",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Kowalski Hardware closing after 61 years",
+   "body": "Kowalski Hardware on Main Street is closing at the end of the month. The owner says it's online competition and his age, nothing the city did. Still, where am I going to buy one hinge and get real advice now?",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn49",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Grange farmers market moves indoors in November",
+   "body": "The Saturday farmers market at the Grange Hall moves indoors starting in November. Same vendors, plus the apple cider guy. It's a small room, so go early if you want eggs.",
+   "stance": "support"
+  },
+  {
+   "id": "hn50",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "New Year's fireworks this year?",
+   "body": "Does anyone know if the city is doing the New Year's Eve fireworks over the river this year? Last year's were cancelled and I haven't seen any announcement yet.",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn51",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "A third dollar store is not what Grant Ave needs",
+   "body": "Another dollar store is opening on Grant Avenue, two blocks from the other two. What that neighborhood actually needs is a real grocery store with fresh produce. Nobody should have to take two buses for a head of lettuce.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn52",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Best bakery in town",
+   "body": "Sunrise Bakery on Maple. The cardamom buns sell out by 9. That's the review.",
+   "stance": "support"
+  },
+  {
+   "id": "hn53",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Art walk needs better promotion",
+   "body": "The First Friday art walk downtown had some wonderful galleries open last week, but hardly anyone knew it was happening. The organizers should put up posters and post on the community pages a week ahead.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn54",
+   "topic": "Riverton businesses, restaurants, festivals and events",
+   "headline": "Chili cook-off raised $8,000 for the pantry",
+   "body": "The Rotary chili cook-off raised over $8,000 for the food pantry this year. Congrats to the Station 2 firefighters on first place again, that green chili is unbeatable.",
+   "stance": "support"
+  },
+  {
+   "id": "hn55",
+   "topic": "Riverton roads and potholes",
+   "headline": "Lincoln Ave pothole ate my tire",
+   "body": "There's a pothole on Lincoln Avenue just past the gas station that's big enough to swallow a small dog. Blew out my front tire last night. I reported it through the city app two weeks ago and it's still there.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn56",
+   "topic": "Riverton roads and potholes",
+   "headline": "The Fifth and Oak roundabout is growing on me",
+   "body": "The new roundabout at Fifth and Oak is growing on me. Traffic moves faster, but half the drivers still don't know who yields. A few more signs or a quick video from the city would help.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn57",
+   "topic": "Riverton roads and potholes",
+   "headline": "Birchwood Drive finally repaved",
+   "body": "Birchwood Drive was repaved this week after years of patch jobs. It's smooth as glass. Thanks to the street crews who worked through that heat.",
+   "stance": "support"
+  },
+  {
+   "id": "hn58",
+   "topic": "Riverton roads and potholes",
+   "headline": "Speeding on Crescent Street",
+   "body": "Cars fly down Crescent Street at 50 in a 25 zone, right past the elementary school. We've asked for speed bumps for three years. Does someone have to get hurt first?",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn59",
+   "topic": "Riverton roads and potholes",
+   "headline": "When will the Water Street bridge reopen?",
+   "body": "The Water Street bridge has been closed for inspection since June and the detour adds 15 minutes each way. Does anyone know if there's a reopening date, or is it going to need a full replacement?",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn60",
+   "topic": "Riverton roads and potholes",
+   "headline": "Plows keep skipping Ridgeview Court",
+   "body": "Every storm the plows clear the main roads and forget Ridgeview Court exists. Last winter we were snowed in for two days and couldn't get out of our driveways, never mind find parking anywhere. Please add us to the route.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn61",
+   "topic": "Riverton roads and potholes",
+   "headline": "Try the Washington Blvd road diet with paint first",
+   "body": "Public works is proposing to cut Washington Boulevard from four lanes to two, with a center turn lane and bike lanes. I've read that these road diets reduce crashes, and it would be nice to bike to work without fearing for my life. But at rush hour Washington is already backed up, and I worry traffic will just pour onto the side streets around Hillcrest. I'd like to see a trial with temporary paint and cones before they spend money on permanent curbs.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn62",
+   "topic": "Riverton roads and potholes",
+   "headline": "fix route 9 by the quarry",
+   "body": "route 9 by the quarry is basically a gravel road at this point. my suspension is shot. how is this still not fixed",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn63",
+   "topic": "Riverton roads and potholes",
+   "headline": "New sidewalks by the senior center",
+   "body": "The new sidewalks and curb ramps around the senior center on Walnut make such a difference. My dad uses a walker and can finally get to the pharmacy on his own.",
+   "stance": "support"
+  },
+  {
+   "id": "hn64",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "Fall colors starting on Hawk Hill",
+   "body": "The maples on the Hawk Hill loop are just starting to turn. Went up at sunrise and had the overlook to myself. Trail is dry, about three miles round trip.",
+   "stance": "support"
+  },
+  {
+   "id": "hn65",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "ATVs are tearing up the Greenway",
+   "body": "Someone keeps riding ATVs on the Riverton Greenway trail at night. The ruts near the creek crossing are a foot deep now and it's dangerous for strollers and wheelchairs. The county needs to put in bollards.",
+   "stance": "oppose"
+  },
+  {
+   "id": "hn66",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "Deer everywhere this year",
+   "body": "The deer population around Riverton has exploded. They've eaten every hosta in my yard and I nearly hit two on County Road 4 last week. I'm not keen on a cull, but something has to be done.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn67",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "Is the quarry beach safe to swim?",
+   "body": "Saw some kids swimming at the old quarry beach below the dam. Is the water tested? I remember reports about bacteria after heavy rain a few years ago.",
+   "stance": "undecided"
+  },
+  {
+   "id": "hn68",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "River cleanup this Saturday",
+   "body": "The Friends of the Riverton River are holding a cleanup this Saturday at 9am, meeting at the boat launch. Gloves and bags provided. Last year we pulled out 40 tires and a shopping cart!",
+   "stance": "support"
+  },
+  {
+   "id": "hn69",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "Knotweed is taking over Miller Creek",
+   "body": "Japanese knotweed has taken over the banks of Miller Creek behind the middle school. It's crowding out everything native. The conservation commission should start a removal program before it spreads downstream.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn70",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "Ash borer is killing our street trees",
+   "body": "The emerald ash borer has reached Riverton. Half the ash trees along Poplar Street have bare crowns this summer. The forestry department should be treating the healthy ones now, before we lose most of the shade on the east side.",
+   "stance": "mixed"
+  },
+  {
+   "id": "hn71",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "34 species at Cattail Marsh on Sunday",
+   "body": "Spent Sunday morning at Cattail Marsh just east of Riverton. Counted 34 species, including a pair of sandhill cranes, a northern harrier and more red-winged blackbirds than I could count. The boardwalk has been repaired since spring. If you go, bring binoculars and bug spray, and park at the gravel lot off Hollis Road rather than on the shoulder.",
+   "stance": "support"
+  },
+  {
+   "id": "hn72",
+   "topic": "Nature, trails and outdoors around Riverton",
+   "headline": "good bass fishing spots?",
+   "body": "new to riverton. anyone have a recommendation for a good spot to fish for bass that isnt crowded on weekends? got a kayak so i dont need a dock",
+   "stance": "undecided"
+  }
+ ]
+}

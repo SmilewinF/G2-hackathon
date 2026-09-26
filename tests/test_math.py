@@ -1,15 +1,17 @@
 """Model-free checks of the scoring primitives and the pipeline's structural guarantees."""
 
+import copy
 import math
-import zlib
 
 import numpy as np
 import pytest
 
+from helpers import TOY_ANCHORS, HashEmbedder, toy_corpus
+
 from novelty.data import load_fixed_content
 from novelty.models import Stance, Submission
-from novelty.scorer import NoveltyScorer
-from novelty.signals import CalibrationError, Kind, RobustScale, Signal, SignalResult, normal_cdf, smoothstep
+from novelty.scorer import NoveltyScorer, ScorerConfig, default_signals
+from novelty.signals import CalibrationError, Kind, RobustScale, Signal, SignalResult, WholeTextNovelty, normal_cdf, smoothstep
 from novelty.text import clauses, containment, is_substantive, normalize, shingles
 
 
@@ -65,44 +67,16 @@ def test_is_substantive(clause, expected):
     assert is_substantive(clause) is expected
 
 
-class HashEmbedder:
-    """Deterministic bag-of-words embedder so scorer invariants can be tested without a model."""
-
-    name = "hash"
-
-    def embed(self, texts):
-        out = np.zeros((len(texts), 64), dtype=np.float32)
-        for i, t in enumerate(texts):
-            for w in t.lower().split():
-                out[i, zlib.crc32(w.encode()) % 64] += 1.0
-        return out / np.clip(np.linalg.norm(out, axis=1, keepdims=True), 1e-12, None)
-
-
-ANCHORS = ["the football match was great and the striker scored twice in the final minutes"]
-
-
-def _sub(i, stance=Stance.SUPPORT):
-    return Submission(
-        headline=f"Garage idea {i}",
-        body=f"The council plan for the garage and the park is idea number {i} for the downtown area.",
-        stance=stance,
-    )
-
-
-def _corpus():
-    return [_sub(i, Stance.SUPPORT if i % 4 else Stance.OPPOSE) for i in range(12)]
-
-
 @pytest.fixture
 def toy_scorer():
-    return NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS)
+    return NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS)
 
 
 def test_every_score_component_is_bounded(toy_scorer):
     for text in ["the garage park downtown council plan", "the football goal match striker", "a zebra plays the violin"]:
         r = toy_scorer.score(Submission(headline="x", body=text + " is what I think about it", stance="mixed"))
         for value in (r.score, r.novelty, r.semantic_novelty, r.clause_novelty, r.stance_rarity, r.relevance, r.relevance_gate):
-            if value is None:  # clause_novelty is None for single-clause text
+            if value is None:  # clause_novelty is None when exactly one clause is substantive
                 continue
             assert 0.0 <= value <= 1.0 and not math.isnan(value)
 
@@ -120,7 +94,7 @@ def test_most_common_stance_has_zero_rarity(toy_scorer):
 
 def test_corpus_must_exceed_neighbourhood_size():
     with pytest.raises(ValueError):
-        NoveltyScorer(load_fixed_content(), _corpus()[:3], HashEmbedder(), ANCHORS)
+        NoveltyScorer(load_fixed_content(), toy_corpus()[:3], HashEmbedder(), TOY_ANCHORS)
 
 
 class ConstantEmbedder:
@@ -134,7 +108,7 @@ class ConstantEmbedder:
 
 def test_calibration_fails_loudly_when_the_embedder_cannot_separate_topic_from_chatter():
     with pytest.raises(CalibrationError, match="not distinguishable"):
-        NoveltyScorer(load_fixed_content(), _corpus(), ConstantEmbedder(), ANCHORS)
+        NoveltyScorer(load_fixed_content(), toy_corpus(), ConstantEmbedder(), TOY_ANCHORS)
 
 
 def test_duplicate_ids_are_rejected(toy_scorer):
@@ -143,10 +117,8 @@ def test_duplicate_ids_are_rejected(toy_scorer):
 
 
 def test_signal_names_must_be_unique():
-    from novelty.signals import WholeTextNovelty
-
     with pytest.raises(ValueError, match="unique"):
-        NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS,
+        NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
                       signals=[WholeTextNovelty(), WholeTextNovelty()])
 
 
@@ -165,9 +137,7 @@ class BannedWord(Signal):
 
 
 def test_custom_signals_plug_into_the_pipeline(toy_scorer):
-    from novelty.scorer import default_signals
-
-    scorer = NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS,
+    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
                            signals=[*default_signals(toy_scorer.config), BannedWord()])
     sub = Submission(headline="Deal", body="The garage park plan is a scam and the council knows it", stance="oppose")
     r = scorer.score(sub)
@@ -185,10 +155,8 @@ def test_signal_results_outside_unit_interval_are_rejected():
 
 def test_incremental_calibration_matches_a_full_refit():
     """update() must reach exactly the state fit() would compute on the same index."""
-    import copy
-
-    scorer = NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS)
-    for i in range(3):  # stays below the TF-IDF refit threshold, so every update is incremental
+    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS)
+    for i in range(3):  # 14 entries: incremental; 15: TF-IDF refit, so the novelty signals re-fit; 16: incremental again
         scorer.add(Submission(headline=f"Extra {i}", body=f"The garage could host market stall number {i} "
                               f"with the downtown council support every weekend.", stance="mixed", id=f"e{i}"))
     version = scorer.index.version
@@ -206,11 +174,11 @@ def test_incremental_calibration_matches_a_full_refit():
                     assert a == pytest.approx(b, abs=1e-9), (name, attr)
                 else:
                     assert a.median == pytest.approx(b.median, abs=1e-9) and a.scale == pytest.approx(b.scale, abs=1e-9)
-    assert scorer.index.version == version, "test assumption: no TF-IDF refit happened"
+    assert scorer.index.version == version, "a full fit() must not refit the index's TF-IDF"
 
 
 def test_tfidf_refits_periodically_not_on_every_insert():
-    scorer = NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS)
+    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS)
     v0 = scorer.index.version
     versions = []
     for i in range(10):
@@ -228,3 +196,32 @@ def test_fork_is_independent_of_its_source(toy_scorer):
     assert len(fork.corpus) == len(toy_scorer.corpus) + 1
     assert toy_scorer.index.get("f1") is None
     assert fork.embedder is toy_scorer.embedder  # shared, not copied
+
+
+# ---------------------------------------------------------------- learned relevance
+
+
+def _toy_negatives(n=12):
+    return [Submission(headline=f"Bus route {i}", body=f"The number {i} bus is late every morning and the drivers are short staffed.",
+                       stance="oppose", id=f"neg{i}") for i in range(n)]
+
+
+def test_learned_relevance_falls_back_to_the_margin_without_enough_negatives(toy_scorer):
+    from novelty.signals import TopicMargin
+
+    rel = toy_scorer.signal("relevance")
+    assert rel.uses_fallback
+    explicit = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
+                             signals=[*(s for s in default_signals(ScorerConfig()) if s.name != "relevance"), TopicMargin()])
+    sub = Submission(headline="Flood park", body="The park and garage site could hold a flood basin for downtown.", stance="mixed")
+    assert toy_scorer.score(sub).score == explicit.score(sub).score
+
+
+def test_learned_relevance_is_used_when_negatives_are_given():
+    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
+                           relevance_negatives=_toy_negatives())
+    rel = scorer.signal("relevance")
+    assert not rel.uses_fallback and len(scorer.index.negative_content) == 12
+    r = scorer.score(Submission(headline="Buses", body="The number 7 bus is late every morning and short staffed.", stance="oppose"))
+    assert 0.0 <= r.relevance_gate <= 1.0 and r.relevance_margin is not None
+    assert all(0.0 <= v <= 1.0 for v in scorer.corpus_relevance().values())
