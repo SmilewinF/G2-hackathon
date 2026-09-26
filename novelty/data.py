@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USER_FILE = DATA_DIR / "user_submissions.json"  # written by the web UI, gitignored
+NEGATIVES_FILE = "relevance_negatives.json"  # training data for the learned relevance gate
 
 
 def _load(name: str, expected: type) -> Any:
@@ -85,6 +86,16 @@ def load_off_topic_anchors() -> list[str]:
     if bad or not anchors:
         raise DataError(f"off_topic_anchors.json must be a non-empty list of strings (bad items: {bad})")
     return anchors
+
+
+def load_relevance_negatives() -> list[Submission]:
+    """Article-specific hard negatives: same-town comments that are NOT about this article
+    (data/relevance_negatives.json). Training data for TopicDiscriminant, never used to evaluate."""
+    raw = _load(NEGATIVES_FILE, dict)
+    items = raw.get("items")
+    if not isinstance(items, list):
+        raise DataError(f"{NEGATIVES_FILE} must have an 'items' list")
+    return _submissions(items, NEGATIVES_FILE)
 
 
 def load_probes() -> dict[str, list[dict]]:
@@ -166,6 +177,7 @@ def build_scorer(
     config: ScorerConfig = ScorerConfig(),
     include_user_submissions: bool = False,
     user_file: Path = USER_FILE,
+    use_relevance_negatives: bool = True,
 ) -> NoveltyScorer:
     """Scorer over the seed corpus, optionally plus the web UI's admitted submissions."""
     corpus = load_corpus()
@@ -181,4 +193,5 @@ def build_scorer(
         embedder=embedder if embedder is not None else default_embedder(),
         off_topic_anchors=load_off_topic_anchors(),
         config=config,
+        relevance_negatives=load_relevance_negatives() if use_relevance_negatives else (),
     )

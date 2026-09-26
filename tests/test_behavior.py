@@ -10,6 +10,7 @@ import pytest
 
 from helpers import NOT_NOVEL_MAX, NOVEL_MIN, UNREWARDED, USER_IDS, already_submitted, assert_novel, corpus_entry
 from novelty.data import load_probes
+from novelty.data import load_probes
 from novelty.models import Stance, Submission
 
 PROBE_COUNTS = {group: len(items) for group, items in load_probes().items()}  # parametrize over every probe
@@ -39,6 +40,18 @@ def test_high_novelty_but_low_relevance_is_not_rewarded(scorer, probes, idx):
     assert r.semantic_novelty >= 0.8, "off-topic text is maximally unlike the corpus, i.e. highly 'novel'"
     assert r.relevance_margin <= 0.0
     assert r.score <= UNREWARDED, (sub.id, r)
+
+
+ADJACENT = load_probes()["off_topic_adjacent"]
+
+
+@pytest.mark.parametrize("probe", ADJACENT, ids=lambda p: p["id"])
+def test_same_town_civic_comments_about_other_subjects_are_not_rewarded(scorer, probe):
+    """Bus routes, library hours, water rates, snow plowing, polling places, school start times:
+    same town and civic tone, but not a response to this article. The contrastive-margin gate let
+    these through at 0.45-0.97; the learned relevance gate must give them nothing."""
+    r = scorer.score(Submission.from_dict(probe))
+    assert r.score <= UNREWARDED, (probe["id"], r.score, r.relevance_gate)
 
 
 def test_same_town_different_subject_is_not_rewarded(scorer, probes):
@@ -130,12 +143,17 @@ def test_crowded_takes_are_less_novel_than_one_off_takes_within_the_corpus(score
 
 
 def test_relevance_gate_keeps_nearly_all_genuine_responses(scorer):
-    """The gate must not be so strict that ordinary on-topic comments lose their reward."""
+    """The gate must not be so strict that ordinary on-topic comments lose their reward.
+
+    Leave-one-out: each corpus comment is judged by a gate trained without it. With the learned
+    gate, 94% keep a full gate; two seed comments would be blocked as new submissions: c36 (a
+    short question about the shuttle) and c49 (a process complaint about the vote). That is the
+    measured cost of blocking same-town off-topic text, and is documented in the README."""
     relevance = scorer.corpus_relevance()
-    passing = [c for c, r in relevance.items() if r >= scorer.config.relevance_full]
-    assert len(passing) / len(relevance) >= 0.9
-    seed = {c: r for c, r in relevance.items() if c.startswith("c")}
-    assert all(r > scorer.config.relevance_floor for r in seed.values())
+    full = [c for c, r in relevance.items() if r >= 1.0]
+    assert len(full) / len(relevance) >= 0.9
+    blocked = [c for c, r in relevance.items() if c.startswith("c") and r == 0.0]
+    assert len(blocked) <= 2, blocked
 
 
 def test_all_scores_are_normalised(scorer, probes):

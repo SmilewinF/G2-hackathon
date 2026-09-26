@@ -105,6 +105,7 @@ class ReferenceIndex:
         dense_weight: float,
         preparer: TextPreparer | None = None,
         refit_growth: float = 0.1,
+        relevance_negatives: Sequence[Submission] = (),
     ) -> None:
         if not off_topic_anchors:
             raise CalibrationError("at least one off-topic anchor is required to calibrate relevance")
@@ -117,6 +118,11 @@ class ReferenceIndex:
         anchor_vecs = embedder.embed(list(off_topic_anchors))
         self.generic_vec = unit(anchor_vecs.mean(axis=0))
         dim = anchor_vecs.shape[1]
+        # Content vectors (prepared and embedded exactly like a submission's substantive body) of
+        # the generic anchors and of the article-specific hard negatives: same-town comments that
+        # are NOT about this article. The learned relevance signal trains on them.
+        self.anchor_content = self._content_vectors([(".", a) for a in off_topic_anchors], dim)
+        self.negative_content = self._content_vectors([(n.headline, n.body) for n in relevance_negatives], dim)
 
         self.entries: list[Entry] = []
         self._by_id: dict[str, int] = {}
@@ -134,6 +140,15 @@ class ReferenceIndex:
 
         prep = self.preparer.prepare(fixed.title, fixed.text)
         self._append([(ARTICLE_ID, None, prep, True)])
+
+    def _content_vectors(self, pairs: Sequence[tuple[str, str]], dim: int) -> np.ndarray:
+        if not pairs:
+            return np.zeros((0, dim), dtype=np.float32)
+        texts = []
+        for headline, body in pairs:
+            prep = self.preparer.prepare(headline, body)
+            texts.append(_content_text(prep.clauses, prep.substantive) or prep.analysis_text)
+        return self.embedder.embed(texts)
 
     # ------------------------------------------------------------------ writing
 

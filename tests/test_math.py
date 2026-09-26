@@ -10,7 +10,7 @@ from helpers import TOY_ANCHORS, HashEmbedder, toy_corpus
 
 from novelty.data import load_fixed_content
 from novelty.models import Stance, Submission
-from novelty.scorer import NoveltyScorer, default_signals
+from novelty.scorer import NoveltyScorer, ScorerConfig, default_signals
 from novelty.signals import CalibrationError, Kind, RobustScale, Signal, SignalResult, WholeTextNovelty, normal_cdf, smoothstep
 from novelty.text import clauses, containment, is_substantive, normalize, shingles
 
@@ -196,3 +196,32 @@ def test_fork_is_independent_of_its_source(toy_scorer):
     assert len(fork.corpus) == len(toy_scorer.corpus) + 1
     assert toy_scorer.index.get("f1") is None
     assert fork.embedder is toy_scorer.embedder  # shared, not copied
+
+
+# ---------------------------------------------------------------- learned relevance
+
+
+def _toy_negatives(n=12):
+    return [Submission(headline=f"Bus route {i}", body=f"The number {i} bus is late every morning and the drivers are short staffed.",
+                       stance="oppose", id=f"neg{i}") for i in range(n)]
+
+
+def test_learned_relevance_falls_back_to_the_margin_without_enough_negatives(toy_scorer):
+    from novelty.signals import TopicMargin
+
+    rel = toy_scorer.signal("relevance")
+    assert rel.uses_fallback
+    explicit = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
+                             signals=[*(s for s in default_signals(ScorerConfig()) if s.name != "relevance"), TopicMargin()])
+    sub = Submission(headline="Flood park", body="The park and garage site could hold a flood basin for downtown.", stance="mixed")
+    assert toy_scorer.score(sub).score == explicit.score(sub).score
+
+
+def test_learned_relevance_is_used_when_negatives_are_given():
+    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
+                           relevance_negatives=_toy_negatives())
+    rel = scorer.signal("relevance")
+    assert not rel.uses_fallback and len(scorer.index.negative_content) == 12
+    r = scorer.score(Submission(headline="Buses", body="The number 7 bus is late every morning and short staffed.", stance="oppose"))
+    assert 0.0 <= r.relevance_gate <= 1.0 and r.relevance_margin is not None
+    assert all(0.0 <= v <= 1.0 for v in scorer.corpus_relevance().values())

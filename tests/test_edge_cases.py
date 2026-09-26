@@ -131,10 +131,16 @@ def test_long_rehash_of_existing_takes_is_not_rewarded(scorer):
     assert _score(scorer, "My view on the park", body, "mixed").score <= 0.35
 
 
-def test_half_off_topic_half_novel_rewards_the_novel_half(scorer):
-    _novel(scorer, "Two things",
-           "I finally tried the new ramen place near the station and the broth was incredible. The park should "
-           "be built with rain gardens and an underground tank so Elm Street stops flooding every spring.")
+def test_half_off_topic_half_novel_is_not_rewarded_as_novel(scorer):
+    """Trade-off of the learned relevance gate: relevance is judged on the whole substantive body,
+    so a comment that is half unrelated chatter falls below the learned boundary. With the old
+    contrastive-margin gate this scored 0.74; now it is treated as off-topic. Judging relevance
+    clause by clause would reward the on-topic half, but must not reopen the "mentions parking in
+    passing" leak; see README "Known limitations"."""
+    r = _score(scorer, "Two things",
+               "I finally tried the new ramen place near the station and the broth was incredible. The park should "
+               "be built with rain gardens and an underground tank so Elm Street stops flooding every spring.")
+    assert r.score <= NOT_NOVEL_MAX
 
 
 def test_mostly_off_topic_with_one_relevant_line_is_heavily_discounted(scorer):
@@ -146,7 +152,8 @@ def test_mostly_off_topic_with_one_relevant_line_is_heavily_discounted(scorer):
         "We also watched a great documentary about octopuses that I would recommend to anyone.",
     ])
     r = _score(scorer, "A few thoughts", body)
-    assert 0.0 < r.score <= 0.3, "one relevant idea earns something, but the comment is mostly off-topic"
+    # With the learned relevance gate a mostly off-topic comment earns nothing (0.13 before).
+    assert r.score <= 0.3, "the comment is mostly off-topic"
 
 
 def test_body_length_limit_is_enforced():
@@ -189,3 +196,21 @@ def test_typo_copy_of_a_corpus_comment_is_still_a_copy(scorer):
                "I run a shoe repiar shop on Main Stret. Most of my custmers drive in, drop off, and leave. Take away "
                "600 spaces and they will just go to the mal where parking is free and easy.", "oppose")
     assert r.near_duplicate_of == "c01" and r.score == 0.0
+
+
+def test_spelling_correction_is_identical_across_processes():
+    """candidates() returns a set; with per-process string hashing, frequency ties used to be
+    broken differently on every run, so the same typo could be corrected (and scored) differently."""
+    import os
+    import subprocess
+    import sys
+
+    code = ("from novelty.preparation import EnglishPreparer; p = EnglishPreparer(['Elm Street garage park']); "
+            "print(p.prepare('Parkng is importent', 'Withot the garaje peple cant park and they wil not come "
+            "to shops; evry stor on Main stret wil clos, tbh the counsil shud listn').text)")
+    outputs = set()
+    for seed in ("0", "12345"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        outputs.add(subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                                   check=True).stdout)
+    assert len(outputs) == 1, outputs

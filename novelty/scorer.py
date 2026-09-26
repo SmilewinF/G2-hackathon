@@ -50,6 +50,7 @@ from .signals import (
     SignalResult,
     Specificity,
     StanceRarity,
+    TopicDiscriminant,
     TopicMargin,
     WholeTextNovelty,
 )
@@ -63,8 +64,10 @@ class ScorerConfig:
     dense_weight: float = 0.6  # hybrid similarity = w * embedding cosine + (1 - w) * TF-IDF cosine
     nearest_weight: float = 0.5  # blend of nearest-neighbour distance vs. mean top-k distance
     stance_weight: float = 0.1  # max share of novelty that stance rarity can move
-    relevance_floor: float = 0.1  # calibrated relevance at/below which reward is 0
-    relevance_full: float = 0.5  # calibrated relevance at/above which the gate is fully open
+    relevance_floor: float = 0.1  # TopicMargin: calibrated relevance at/below which reward is 0
+    relevance_full: float = 0.5  # TopicMargin: calibrated relevance at/above which the gate is fully open
+    relevance_shrinkage: float = 0.9  # TopicDiscriminant: covariance shrinkage toward the identity
+    relevance_band: float = 0.25  # TopicDiscriminant: gate half-width, as a share of the on-topic margin
     duplicate_containment: float = 0.6  # shingle containment at which text counts as a copy
     min_specific_words: int = 4  # distinct specific content words needed for full reward
 
@@ -78,7 +81,9 @@ def default_signals(config: ScorerConfig) -> list[Signal]:
         ContentQuality(),
         Specificity(min_specific=config.min_specific_words),
         StanceRarity(weight=config.stance_weight),
-        TopicMargin(floor=config.relevance_floor, full=config.relevance_full),
+        # Learned relevance when the scorer has article-specific hard negatives; TopicMargin otherwise.
+        TopicDiscriminant(shrinkage=config.relevance_shrinkage, band=config.relevance_band,
+                          floor=config.relevance_floor, full=config.relevance_full),
     ]
 
 
@@ -94,6 +99,7 @@ class NoveltyScorer:
         config: ScorerConfig = ScorerConfig(),
         signals: Sequence[Signal] | None = None,
         preparer: TextPreparer | None = None,
+        relevance_negatives: Sequence[Submission] = (),
     ) -> None:
         start = time.perf_counter()
         self.fixed = fixed
@@ -108,7 +114,8 @@ class NoveltyScorer:
         # Article + seed corpus vocabulary: spelling correction prefers these words and never
         # "fixes" them (proper nouns, domain terms).
         preparer = preparer or EnglishPreparer([fixed.embedding_text, *(s.text for s in corpus)])
-        self.index = ReferenceIndex(fixed, embedder, off_topic_anchors, config.dense_weight, preparer)
+        self.index = ReferenceIndex(fixed, embedder, off_topic_anchors, config.dense_weight, preparer,
+                                    relevance_negatives=relevance_negatives)
         seeded = [sub if sub.id else dataclasses.replace(sub, id=f"c{i + 1:02d}") for i, sub in enumerate(corpus)]
         self._add(seeded, on_topic=True)
         self._log_ready(time.perf_counter() - start)
@@ -264,7 +271,9 @@ class NoveltyScorer:
         rel = next((s for s in self.signals if s.name == "relevance"), None)
         if whole is not None and hasattr(whole, "scale"):
             parts.append(f"novelty median {whole.scale.median:.3f} (scale {whole.scale.scale:.3f})")
-        if rel is not None and hasattr(rel, "on_topic_margin"):
+        if rel is not None and hasattr(rel, "boundary") and not getattr(rel, "uses_fallback", False):
+            parts.append(f"learned relevance from {len(self.index.negative_content)} hard negatives")
+        elif rel is not None and hasattr(rel, "on_topic_margin"):
             parts.append(f"typical relevance margin {rel.on_topic_margin:+.3f}")
         log.info("scorer ready: %s in %.0f ms", ", ".join(parts), seconds * 1000)
 
