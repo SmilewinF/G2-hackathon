@@ -85,7 +85,8 @@ class ScoreBreakdown:
     semantic_novelty: float  # [0, 1], robust z-score of raw novelty vs. the corpus, via normal CDF
     raw_novelty: float  # blended cosine distance to nearest neighbours (uncalibrated)
     stance_rarity: float  # [0, 1], 0 = most common stance in the corpus
-    relevance: float  # [0, 1], calibrated similarity to the fixed content
+    relevance: float  # [0, 1], margin / typical on-topic margin
+    relevance_margin: float  # sim(topic) - sim(generic chatter); <= 0 means off-topic
     relevance_gate: float  # [0, 1], smoothstep over relevance; 0 below the floor
     near_duplicate_of: str | None  # corpus id if lexically near-identical
     nearest: list[Neighbor] = field(default_factory=list)
