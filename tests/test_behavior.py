@@ -36,7 +36,7 @@ def test_non_novel_content_is_not_rewarded(scorer, probes, idx):
 def test_high_novelty_but_low_relevance_is_not_rewarded(scorer, probes, idx):
     sub = probes["off_topic"][idx]
     r = scorer.score(sub)
-    assert r.novelty >= 0.8, "off-topic text is maximally unlike the corpus, i.e. highly 'novel'"
+    assert r.semantic_novelty >= 0.8, "off-topic text is maximally unlike the corpus, i.e. highly 'novel'"
     assert r.relevance_margin <= 0.0
     assert r.score <= UNREWARDED, (sub.id, r)
 
@@ -45,7 +45,7 @@ def test_same_town_different_subject_is_not_rewarded(scorer, probes):
     """The hard case: shares the locale and comment genre but not the subject."""
     football = next(p for p in probes["off_topic"] if p.id == "o_football")
     r = scorer.score(football)
-    assert r.novelty >= 0.8
+    assert r.semantic_novelty >= 0.8
     assert r.score <= UNREWARDED
 
 
@@ -109,7 +109,9 @@ def test_off_topic_spam_does_not_redefine_the_topic(scorer, probes):
             body=f"Feed your starter rye flour and keep it at {20 + i} degrees for a better rise and crumb.",
             stance=Stance.SUPPORT,
         )
-        assert scorer.submit(spam).score <= UNREWARDED
+        result = scorer.submit(spam)
+        assert result.score <= UNREWARDED and result.admitted is False
+    assert len(scorer.corpus) == 50, "off-topic spam must not enter the reference corpus"
     for sub in probes["novel_relevant"]:
         assert scorer.score(sub).score >= NOVEL_MIN
     for sub in probes["off_topic"]:

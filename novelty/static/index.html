@@ -117,7 +117,7 @@ $('form').addEventListener('submit', async (e) => {
     corpus = data.corpus;
     userCount = data.user_count;
     updateMeta();
-    render(data.result, commit ? data.id : null);
+    render(data.result, commit);
   } catch (err) {
     $('result').hidden = false;
     $('result').innerHTML = `<span class="error">${esc(err.message)}</span>`;
@@ -135,7 +135,7 @@ $('reset').addEventListener('click', async () => {
   $('result').hidden = true;
 });
 
-function render(r, addedId) {
+function render(r, committed) {
   const pct = (x) => `${Math.round(x * 100)}%`;
   const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v)}</td></tr>`;
   const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(corpus[n.id] || '')}</li>`).join('');
@@ -146,16 +146,20 @@ function render(r, addedId) {
     <div class="bar"><div style="width:${pct(r.score)}"></div></div>
     <table>
       ${row('Novelty', r.novelty)}
+      ${row('Whole-text novelty', r.semantic_novelty)}
+      ${row('Best clause novelty', r.clause_novelty)}
       ${row('Relevance', r.relevance)}
       ${row('Relevance gate', r.relevance_gate)}
-      ${row('Relevance margin', r.relevance_margin)}
+      ${row('Relevance margin', r.relevance_margin ?? '—')}
       ${row('Stance rarity', r.stance_rarity)}
       ${row('Near-duplicate of', r.near_duplicate_of || '—')}
     </table>
     <ul>${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
     <div class="muted" style="margin-top:10px">Nearest existing submissions</div>
     <ul>${nearest}</ul>
-    ${addedId ? `<p class="ok">Added to corpus as ${esc(addedId)} and saved to data/user_submissions.json. Submitting the same idea again will now score lower.</p>` : ''}`;
+    ${committed ? (r.admitted
+      ? `<p class="ok">Added to the corpus and saved. Submitting the same idea again will now score lower.</p>`
+      : `<p class="error">Not added to the corpus: only relevant, non-duplicate, substantive submissions are admitted.</p>`) : ''}`;
 }
 
 init().catch(err => { $('meta').innerHTML = `<span class="error">${esc(err.message)}</span>`; });

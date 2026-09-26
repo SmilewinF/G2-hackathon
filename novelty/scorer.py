@@ -1,26 +1,43 @@
-"""Novelty reward pipeline.
+"""Novelty reward pipeline: orchestrates the reference index and the signals.
 
-    score = novelty × relevance_gate            (both in [0, 1])
+    novelty = min(novelty signals) × Π(modifier signals)
+    score   = novelty × Π(relevance signals)                  (all in [0, 1])
 
-Novelty is measured *relative to the existing corpus*, using hybrid (embedding + TF-IDF)
-similarity to the nearest existing submissions; relevance *relative to the topic* (the
-fixed content plus accepted on-topic responses). Both are self-calibrating: instead of hard-coded
-cosine thresholds (which differ per embedding model), each raw signal is normalised against a
-reference distribution computed from the data itself, so the pipeline behaves the same on the
-local model or on Gemini.
+Default signals (see ``novelty/signals``):
+    novelty    whole_text       hybrid-similarity distance to nearest neighbours
+               clause_coverage  most novel relevant, substantive clause (kitchen-sink / padding defence)
+    modifier   duplicate        near-copy of a submission or of the article → 0
+               quality          keyword lists, repetition, no sentence-like content → 0
+               stance           rarer stance, up to +10 %
+    relevance  relevance        contrastive topic margin of the substantive body → smooth gate
+
+Every signal self-calibrates against the corpus (no hard-coded cosine thresholds), so behaviour
+carries across embedding backends. ``submit`` only admits relevant, non-duplicate, substantive
+submissions into the reference corpus, so spam and copy floods cannot shift the calibration.
 """
 
 from __future__ import annotations
 
-import math
+import dataclasses
 from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
 
 from .embeddings import Embedder
-from .lexical import TfidfIndex, containment, shingles
-from .models import FixedContent, Neighbor, ScoreBreakdown, Stance, Submission
+from .index import ReferenceIndex
+from .models import FixedContent, Neighbor, ScoreBreakdown, Submission
+from .signals import (
+    ClauseCoverage,
+    ContentQuality,
+    DuplicateCheck,
+    Kind,
+    Signal,
+    SignalResult,
+    StanceRarity,
+    TopicMargin,
+    WholeTextNovelty,
+)
 
 
 @dataclass(frozen=True)
@@ -34,17 +51,15 @@ class ScorerConfig:
     duplicate_containment: float = 0.6  # shingle containment at which text counts as a copy
 
 
-def _normal_cdf(z: float) -> float:
-    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-
-
-def _smoothstep(lo: float, hi: float, x: float) -> float:
-    t = min(max((x - lo) / (hi - lo), 0.0), 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
-def _unit(v: np.ndarray) -> np.ndarray:
-    return v / max(float(np.linalg.norm(v)), 1e-12)
+def default_signals(config: ScorerConfig) -> list[Signal]:
+    return [
+        WholeTextNovelty(k=config.k, nearest_weight=config.nearest_weight),
+        ClauseCoverage(),
+        DuplicateCheck(threshold=config.duplicate_containment),
+        ContentQuality(),
+        StanceRarity(weight=config.stance_weight),
+        TopicMargin(floor=config.relevance_floor, full=config.relevance_full),
+    ]
 
 
 class NoveltyScorer:
@@ -55,169 +70,108 @@ class NoveltyScorer:
         embedder: Embedder,
         off_topic_anchors: Sequence[str],
         config: ScorerConfig = ScorerConfig(),
+        signals: Sequence[Signal] | None = None,
     ) -> None:
-        if len(corpus) <= config.k:
-            raise ValueError(f"corpus needs more than k={config.k} submissions")
         self.fixed = fixed
         self.embedder = embedder
         self.config = config
-
-        vecs = embedder.embed([fixed.embedding_text, *off_topic_anchors])
-        self._fixed_vec = vecs[0]
-        # Direction of "generic comment chatter" for this model. Subtracting similarity to it
-        # cancels the genre/format similarity every comment shares with every other comment.
-        self._generic_vec = _unit(vecs[1:].mean(axis=0))
-
-        self._corpus: list[Submission] = []
-        self._shingles: list[frozenset[str]] = []
-        self._topic_member: list[bool] = []
-        self._tfidf = TfidfIndex()
-        self._matrix = np.empty((0, vecs.shape[1]), dtype=np.float32)
-        self._add_many(list(corpus), on_topic=True)
+        self.signals = list(signals) if signals is not None else default_signals(config)
+        names = [s.name for s in self.signals]
+        if len(set(names)) != len(names):
+            raise ValueError(f"signal names must be unique: {names}")
+        if not any(s.kind is Kind.NOVELTY for s in self.signals):
+            raise ValueError("at least one NOVELTY signal is required")
+        self.index = ReferenceIndex(fixed, embedder, off_topic_anchors, config.dense_weight)
+        seeded = [sub if sub.id else dataclasses.replace(sub, id=f"c{i + 1:02d}") for i, sub in enumerate(corpus)]
+        self._add(seeded, on_topic=True)
 
     # ------------------------------------------------------------------ corpus management
 
     @property
     def corpus(self) -> list[Submission]:
-        return list(self._corpus)
+        return self.index.submissions
+
+    def signal(self, name: str) -> Signal:
+        return next(s for s in self.signals if s.name == name)
 
     def add(self, sub: Submission, on_topic: bool = True) -> None:
-        """Add a submission to the reference corpus without scoring it (e.g. when reloading).
+        """Add a submission to the reference corpus without scoring it (e.g. replaying saved ones)."""
+        self._add([sub], on_topic)
 
-        ``on_topic`` controls whether it joins the topic centroid; see ``submit``.
-        """
-        self._add_many([sub], on_topic=on_topic)
+    def _add(self, subs: list[Submission], on_topic: bool) -> None:
+        self.index.add(subs, on_topic=on_topic)
+        for s in self.signals:
+            s.fit(self.index)
+
+    def admission(self, result: ScoreBreakdown) -> tuple[bool, str]:
+        """Only content that could ever earn a reward becomes reference data."""
+        if result.near_duplicate_of is not None:
+            return False, f"not added: duplicate of {result.near_duplicate_of}"
+        if result.signals.get("quality", 1.0) == 0.0:
+            return False, "not added: no substantive content"
+        if result.relevance_gate == 0.0:
+            return False, "not added: off-topic"
+        return True, "added to corpus"
 
     def submit(self, sub: Submission) -> ScoreBreakdown:
-        """Score against everything seen so far, then add it to the corpus.
-
-        Every submission counts for future novelty comparisons, but only relevant ones join the
-        topic reference, so a flood of off-topic spam cannot drag the notion of "on topic".
-        """
+        """Score against everything seen so far; add it to the corpus if the admission policy allows."""
         result = self.score(sub)
-        self._add_many([sub], on_topic=result.relevance_gate > 0.0)
-        return result
-
-    def _add_many(self, subs: list[Submission], on_topic: bool) -> None:
-        vecs = self.embedder.embed([s.text for s in subs])
-        self._corpus.extend(subs)
-        self._shingles.extend(shingles(s.text) for s in subs)
-        self._topic_member.extend([on_topic] * len(subs))
-        self._tfidf.add([s.text for s in subs])
-        self._matrix = np.vstack([self._matrix, vecs])
-        self._calibrate()
-
-    def _calibrate(self) -> None:
-        """Recompute the reference distributions that make raw signals comparable."""
-        # Novelty: leave-one-out raw novelty of every corpus item vs. the rest. Median/MAD are
-        # robust to the corpus's own outliers and near-duplicates.
-        sims = self._hybrid(self._matrix @ self._matrix.T, self._tfidf.pairwise())
-        np.fill_diagonal(sims, -np.inf)
-        loo = np.array([self._raw_novelty(row) for row in sims])
-        self._loo_raw = loo
-        self._nov_median = float(np.median(loo))
-        mad = float(np.median(np.abs(loo - self._nov_median))) * 1.4826
-        self._nov_scale = max(mad, 1e-4)
-
-        # Relevance: topic = fixed content + on-topic submissions. The typical member's
-        # leave-one-out margin defines "fully relevant"; a margin of 0 defines "irrelevant".
-        members = self._matrix[np.array(self._topic_member)]
-        self._topic_sum = members.sum(axis=0) + self._fixed_vec
-        loo_margins = [self._margin(v, _unit(self._topic_sum - v)) for v in members]
-        self._on_topic_margin = max(float(np.median(loo_margins)), 1e-6)
-
-        counts = {s: 0 for s in Stance}
-        for sub in self._corpus:
-            counts[sub.stance] += 1
-        total = len(self._corpus) + len(Stance)
-        self._stance_p = {s: (c + 1) / total for s, c in counts.items()}  # Laplace-smoothed
-
-    # ------------------------------------------------------------------ signals
-
-    def _hybrid(self, dense: np.ndarray, lexical: np.ndarray) -> np.ndarray:
-        w = self.config.dense_weight
-        return w * dense + (1.0 - w) * lexical
-
-    def _raw_novelty(self, sims: np.ndarray) -> float:
-        top = np.sort(sims)[::-1][: self.config.k]
-        w = self.config.nearest_weight
-        return w * (1.0 - float(top[0])) + (1.0 - w) * (1.0 - float(np.mean(top)))
-
-    def _stance_rarity(self, stance: Stance) -> float:
-        p_max = max(self._stance_p.values())
-        return 1.0 - self._stance_p[stance] / p_max
-
-    def _margin(self, vec: np.ndarray, topic: np.ndarray) -> float:
-        """How much closer the text is to the topic than to generic off-topic chatter."""
-        return float(vec @ topic) - float(vec @ self._generic_vec)
-
-    def _relevance(self, vec: np.ndarray) -> tuple[float, float]:
-        margin = self._margin(vec, _unit(self._topic_sum))
-        return min(max(margin / self._on_topic_margin, 0.0), 1.0), margin
+        admitted, reason = self.admission(result)
+        if admitted:
+            if sub.id is None:
+                sub = dataclasses.replace(sub, id=f"s{len(self.index) :03d}")
+            self.add(sub)
+        return dataclasses.replace(result, admitted=admitted, reasons=[*result.reasons, reason])
 
     # ------------------------------------------------------------------ scoring
 
     def score(self, sub: Submission) -> ScoreBreakdown:
-        cfg = self.config
-        vec = self.embedder.embed([sub.text])[0]
-        sims = self._hybrid(self._matrix @ vec, self._tfidf.similarities(sub.text))
-        order = np.argsort(sims)[::-1][: cfg.k]
-        nearest = [Neighbor(self._corpus[i].id, round(float(sims[i]), 4)) for i in order]
-        reasons: list[str] = []
+        analysis = self.index.analyze(sub)
+        results = {s.name: s.evaluate(analysis, self.index) for s in self.signals}
+        return self._combine(results, analysis.sims)
 
-        raw = self._raw_novelty(sims)
-        z = (raw - self._nov_median) / self._nov_scale
-        semantic = _normal_cdf(z)
+    def _combine(self, results: dict[str, SignalResult], sims: np.ndarray) -> ScoreBreakdown:
+        by_kind = {k: [(s.name, results[s.name]) for s in self.signals if s.kind is k] for k in Kind}
+        novelty = min(r.value for _, r in by_kind[Kind.NOVELTY])
+        for _, r in by_kind[Kind.MODIFIER]:
+            novelty *= r.value
+        gate = 1.0
+        for _, r in by_kind[Kind.RELEVANCE]:
+            gate *= r.value
 
-        sub_shingles = shingles(sub.text)
-        overlaps = [containment(sub_shingles, s) for s in self._shingles]
-        best = int(np.argmax(overlaps))
-        duplicate_of = None
-        if overlaps[best] >= cfg.duplicate_containment:
-            duplicate_of = self._corpus[best].id
-            semantic = 0.0
-            reasons.append(f"near-copy of {duplicate_of} ({overlaps[best]:.0%} shingle overlap)")
-        else:
-            reasons.append(f"novelty z={z:+.2f} vs. corpus (nearest {nearest[0].id} @ {nearest[0].similarity:.2f})")
+        order = np.argsort(sims)[::-1][: self.config.k]
+        nearest = [Neighbor(self.index.entries[i].id, round(float(sims[i]), 4)) for i in order]
 
-        rarity = self._stance_rarity(sub.stance)
-        novelty = semantic * (1.0 - cfg.stance_weight + cfg.stance_weight * rarity)
-
-        relevance, margin = self._relevance(vec)
-        gate = _smoothstep(cfg.relevance_floor, cfg.relevance_full, relevance)
-        score = novelty * gate
-
-        if gate == 0.0:
-            reasons.append(f"relevance {relevance:.2f} (margin {margin:+.3f}) is below floor: not rewarded")
-        elif gate < 1.0:
-            reasons.append(f"relevance {relevance:.2f} partially gates the reward ({gate:.2f})")
+        def get(name: str, key: str | None = None, default=0.0):
+            r = results.get(name)
+            if r is None:
+                return default
+            return r.value if key is None else r.detail.get(key, default)
 
         return ScoreBreakdown(
-            score=round(score, 4),
+            score=round(novelty * gate, 4),
             novelty=round(novelty, 4),
-            semantic_novelty=round(semantic, 4),
-            raw_novelty=round(raw, 4),
-            stance_rarity=round(rarity, 4),
-            relevance=round(relevance, 4),
-            relevance_margin=round(margin, 4),
+            semantic_novelty=round(get("whole_text"), 4),
+            clause_novelty=round(get("clause_coverage", default=1.0), 4),
+            raw_novelty=round(get("whole_text", "raw"), 4),
+            stance_rarity=round(get("stance", "rarity"), 4),
+            relevance=round(get("relevance", "relevance", 1.0), 4),
+            relevance_margin=None if get("relevance", "margin", None) is None else round(get("relevance", "margin"), 4),
             relevance_gate=round(gate, 4),
-            near_duplicate_of=duplicate_of,
+            near_duplicate_of=get("duplicate", "of", None),
             nearest=nearest,
-            reasons=reasons,
+            reasons=[reason for r in results.values() for reason in r.reasons],
+            signals={name: round(r.value, 4) for name, r in results.items()},
+            detail={name: r.detail for name, r in results.items()},
         )
 
+    # ------------------------------------------------------------------ inspection
+
     def corpus_novelty(self) -> dict[str, float]:
-        """Leave-one-out semantic novelty of each corpus item (useful for inspection)."""
-        return {
-            s.id or str(i): round(_normal_cdf((r - self._nov_median) / self._nov_scale), 4)
-            for i, (s, r) in enumerate(zip(self._corpus, self._loo_raw))
-        }
+        """Leave-one-out whole-text novelty of each corpus item."""
+        sig = self.signal("whole_text")
+        return {k: round(sig.scale(v), 4) for k, v in sig.loo.items()}
 
     def corpus_relevance(self) -> dict[str, float]:
         """Leave-one-out calibrated relevance of each on-topic corpus item."""
-        out = {}
-        for i, (s, v) in enumerate(zip(self._corpus, self._matrix)):
-            if self._topic_member[i]:
-                m = self._margin(v, _unit(self._topic_sum - v))
-                out[s.id or str(i)] = round(min(max(m / self._on_topic_margin, 0.0), 1.0), 4)
-        return out
+        return self.signal("relevance").corpus_relevance()

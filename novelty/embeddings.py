@@ -84,7 +84,10 @@ class CachedEmbedder:
         self._path = cache_dir / f"{slug}.json"
         self._cache: dict[str, list[float]] = {}
         if self._path.exists():
-            self._cache = json.loads(self._path.read_text(encoding="utf-8"))
+            try:
+                self._cache = json.loads(self._path.read_text(encoding="utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                self._cache = {}  # a corrupt cache is only a cache: rebuild it
 
     @staticmethod
     def _key(text: str) -> str:
@@ -94,11 +97,24 @@ class CachedEmbedder:
         keys = [self._key(t) for t in texts]
         missing = list(dict.fromkeys(t for t, k in zip(texts, keys) if k not in self._cache))
         if missing:
-            for text, vec in zip(missing, self.inner.embed(missing)):
+            vecs = _validated(self.inner.embed(missing), len(missing), self.name)
+            for text, vec in zip(missing, vecs):
                 self._cache[self._key(text)] = vec.tolist()
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(self._cache), encoding="utf-8")
-        return np.array([self._cache[k] for k in keys], dtype=np.float32)
+            tmp = self._path.with_name(self._path.name + ".tmp")
+            tmp.write_text(json.dumps(self._cache), encoding="utf-8")
+            os.replace(tmp, self._path)  # atomic, so an interrupted run cannot corrupt the cache
+        return np.array([self._cache[k] for k in keys], dtype=np.float32).reshape(len(keys), -1)
+
+
+def _validated(vecs: np.ndarray, n: int, name: str) -> np.ndarray:
+    """Refuse to cache (and score with) malformed vectors from a misbehaving backend."""
+    vecs = np.asarray(vecs, dtype=np.float32)
+    if vecs.ndim != 2 or vecs.shape[0] != n:
+        raise RuntimeError(f"{name} returned {vecs.shape} vectors for {n} texts")
+    if not np.isfinite(vecs).all():
+        raise RuntimeError(f"{name} returned non-finite vector values")
+    return vecs
 
 
 def default_embedder() -> Embedder:

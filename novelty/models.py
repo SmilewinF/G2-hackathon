@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
+
+from .text import normalize
 
 MAX_FIXED_WORDS = 100
 HEADLINE_MAX_CHARS = 120
@@ -48,8 +51,11 @@ class Submission:
     id: str | None = None
 
     def __post_init__(self) -> None:
-        headline = self.headline.strip()
-        body = self.body.strip()
+        if not isinstance(self.headline, str) or not isinstance(self.body, str):
+            raise ValueError("headline and body must be strings")
+        # Normalise before validating, so invisible characters cannot pad a body past the minimum.
+        headline = " ".join(normalize(self.headline).split())
+        body = normalize(self.body)
         if not headline:
             raise ValueError("headline is required")
         if len(headline) > HEADLINE_MAX_CHARS:
@@ -58,7 +64,10 @@ class Submission:
             raise ValueError(f"body must be {BODY_MIN_CHARS}-{BODY_MAX_CHARS} characters")
         object.__setattr__(self, "headline", headline)
         object.__setattr__(self, "body", body)
-        object.__setattr__(self, "stance", Stance(self.stance))
+        try:
+            object.__setattr__(self, "stance", Stance(self.stance))
+        except ValueError:
+            raise ValueError(f"stance must be one of {[s.value for s in Stance]}") from None
 
     @property
     def text(self) -> str:
@@ -67,7 +76,7 @@ class Submission:
 
     @classmethod
     def from_dict(cls, d: dict) -> Submission:
-        return cls(headline=d["headline"], body=d["body"], stance=Stance(d["stance"]), id=d.get("id"))
+        return cls(headline=d["headline"], body=d["body"], stance=d["stance"], id=d.get("id"))
 
 
 @dataclass(frozen=True)
@@ -81,13 +90,17 @@ class ScoreBreakdown:
     """Final reward plus every intermediate signal, so a score can be explained."""
 
     score: float  # final reward in [0, 1] = novelty * relevance_gate
-    novelty: float  # [0, 1], semantic novelty adjusted by stance rarity
-    semantic_novelty: float  # [0, 1], robust z-score of raw novelty vs. the corpus, via normal CDF
-    raw_novelty: float  # blended hybrid-similarity distance to nearest neighbours (uncalibrated)
+    novelty: float  # [0, 1] = min(novelty signals) * product(modifier signals)
+    semantic_novelty: float  # [0, 1], whole-text novelty vs. the corpus (robust z -> normal CDF)
+    clause_novelty: float  # [0, 1], novelty of the most novel relevant, substantive clause
+    raw_novelty: float  # uncalibrated whole-text distance to nearest neighbours
     stance_rarity: float  # [0, 1], 0 = most common stance in the corpus
     relevance: float  # [0, 1], margin / typical on-topic margin
-    relevance_margin: float  # sim(topic) - sim(generic chatter); <= 0 means off-topic
-    relevance_gate: float  # [0, 1], smoothstep over relevance; 0 below the floor
-    near_duplicate_of: str | None  # corpus id if lexically near-identical
+    relevance_margin: float | None  # sim(topic) - sim(generic chatter); <= 0 means off-topic
+    relevance_gate: float  # [0, 1], product of relevance signals; 0 = not rewarded
+    near_duplicate_of: str | None  # id of the copied entry ("article" = the fixed content)
     nearest: list[Neighbor] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    signals: dict[str, float] = field(default_factory=dict)  # every signal's value, by name
+    admitted: bool | None = None  # set by submit(): whether it joined the reference corpus
+    detail: dict[str, Any] = field(default_factory=dict)  # per-signal diagnostics
