@@ -4,6 +4,10 @@
     python -m novelty corpus                    # leave-one-out novelty of each corpus item
     python -m novelty score --headline ... --body ... --stance support [--json]
     python -m novelty serve [--port 8000]      # minimal web UI at http://127.0.0.1:8000
+
+Global options: --log-level LEVEL, or -v for DEBUG. Logs go to stderr (and NOVELTY_LOG_FILE if
+set). ``score`` and ``serve`` log at INFO by default; ``demo`` and ``corpus`` only warnings, so
+their tables stay readable. Exit codes: 0 ok, 2 a reported error, 130 interrupted.
 """
 
 from __future__ import annotations
@@ -11,10 +15,16 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import logging
+import os
 import sys
 
 from .data import build_scorer, load_probes
+from .errors import NoveltyError
+from .logging_setup import configure_logging
 from .models import Stance, Submission
+
+log = logging.getLogger("novelty.cli")
 
 
 def _cmd_demo(_: argparse.Namespace) -> None:
@@ -52,8 +62,14 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     serve(port=args.port)
 
 
-def main(argv: list[str] | None = None) -> None:
+_DEFAULT_LEVEL = {"demo": "WARNING", "corpus": "WARNING", "score": "INFO", "serve": "INFO"}
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="novelty")
+    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], type=str.upper,
+                        help="default: INFO for score/serve, WARNING for demo/corpus (or NOVELTY_LOG_LEVEL)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="shorthand for --log-level DEBUG")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("demo").set_defaults(fn=_cmd_demo)
     sub.add_parser("corpus").set_defaults(fn=_cmd_corpus)
@@ -67,7 +83,20 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--port", type=int, default=8000)
     p.set_defaults(fn=_cmd_serve)
     args = parser.parse_args(argv)
-    args.fn(args)
+
+    level = "DEBUG" if args.verbose else (args.log_level or os.environ.get("NOVELTY_LOG_LEVEL")
+                                          or _DEFAULT_LEVEL[args.cmd])
+    configure_logging(level)
+    try:
+        args.fn(args)
+    except NoveltyError as e:
+        log.debug("command failed", exc_info=True)
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+    return 0
 
 
 if __name__ == "__main__":

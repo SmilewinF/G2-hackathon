@@ -1,10 +1,11 @@
 """Model-free checks of the scoring primitives and the pipeline's structural guarantees."""
 
 import math
-import zlib
 
 import numpy as np
 import pytest
+
+from helpers import HashEmbedder
 
 from novelty.data import load_fixed_content
 from novelty.models import Stance, Submission
@@ -63,19 +64,6 @@ def test_clauses_split_lists_and_merge_fragments():
 )
 def test_is_substantive(clause, expected):
     assert is_substantive(clause) is expected
-
-
-class HashEmbedder:
-    """Deterministic bag-of-words embedder so scorer invariants can be tested without a model."""
-
-    name = "hash"
-
-    def embed(self, texts):
-        out = np.zeros((len(texts), 64), dtype=np.float32)
-        for i, t in enumerate(texts):
-            for w in t.lower().split():
-                out[i, zlib.crc32(w.encode()) % 64] += 1.0
-        return out / np.clip(np.linalg.norm(out, axis=1, keepdims=True), 1e-12, None)
 
 
 ANCHORS = ["the football match was great and the striker scored twice in the final minutes"]

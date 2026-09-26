@@ -113,11 +113,11 @@ $('form').addEventListener('submit', async (e) => {
       body: JSON.stringify({ headline: $('headline').value, body: $('body').value, stance: $('stance').value, commit }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    if (!res.ok) throw new Error(data.error + (data.request_id ? ` (request ${data.request_id})` : ''));
     corpusSize = data.corpus_size;
     userCount = data.user_count;
     updateMeta();
-    render(data.result, commit);
+    render(data.result, commit, data.saved);
   } catch (err) {
     $('result').hidden = false;
     $('result').innerHTML = `<span class="error">${esc(err.message)}</span>`;
@@ -128,14 +128,16 @@ $('form').addEventListener('submit', async (e) => {
 
 $('reset').addEventListener('click', async () => {
   if (!confirm('Remove all submissions you added to the corpus?')) return;
-  const data = await (await fetch('/api/reset', { method: 'POST' })).json();
+  const res = await fetch('/api/reset', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) { alert(`Reset failed: ${data.error}`); return; }
   corpusSize = data.corpus_size;
   userCount = data.user_count;
   updateMeta();
   $('result').hidden = true;
 });
 
-function render(r, committed) {
+function render(r, committed, saved) {
   const pct = (x) => `${Math.round(x * 100)}%`;
   const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v ?? '—')}</td></tr>`;
   const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(n.headline || '')}</li>`).join('');
@@ -158,7 +160,9 @@ function render(r, committed) {
     <div class="muted" style="margin-top:10px">Nearest existing submissions</div>
     <ul>${nearest}</ul>
     ${committed ? (r.admitted
-      ? `<p class="ok">Added to the corpus and saved. Submitting the same idea again will now score lower.</p>`
+      ? (saved === false
+        ? `<p class="error">Added to the corpus, but the server could not save it to disk (see the server log).</p>`
+        : `<p class="ok">Added to the corpus and saved. Submitting the same idea again will now score lower.</p>`)
       : `<p class="error">Not added to the corpus: only relevant, non-duplicate, substantive submissions are admitted.</p>`) : ''}`;
 }
 

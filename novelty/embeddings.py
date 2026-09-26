@@ -88,7 +88,7 @@ class LocalEmbedder:
             raise EmbeddingError(f"{self.name} failed to embed {len(texts)} text(s): {e}") from e
 
 
-def _is_transient(e: Exception) -> bool:
+def is_transient_error(e: Exception) -> bool:
     """Worth retrying: rate limits, server errors, timeouts, dropped connections."""
     code = getattr(e, "code", None) or getattr(e, "status_code", None)
     return code in (408, 429, 500, 502, 503, 504) or isinstance(e, (TimeoutError, ConnectionError))
@@ -129,7 +129,7 @@ class GeminiEmbedder:
             try:
                 return self._client.models.embed_content(model=self._model, contents=batch, config=config)
             except Exception as e:
-                if attempt == self.ATTEMPTS or not _is_transient(e):
+                if attempt == self.ATTEMPTS or not is_transient_error(e):
                     raise EmbeddingError(f"Gemini embedding request failed: {e}") from e
                 delay = 2 ** (attempt - 1)
                 log.warning("Gemini embedding attempt %d/%d failed (%s); retrying in %d s",
