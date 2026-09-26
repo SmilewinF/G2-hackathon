@@ -40,7 +40,7 @@ def _cmd_score(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(dataclasses.asdict(r), indent=2))
         return
-    print(f"score {r.score:.3f}  (novelty {r.novelty:.3f} × relevance gate {r.relevance_gate:.2f})")
+    print(f"score {r.score:.3f}  (novelty {r.novelty:.3f} x relevance gate {r.relevance_gate:.2f})")
     for reason in r.reasons:
         print(f"  - {reason}")
 
