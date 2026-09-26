@@ -1,0 +1,138 @@
+"""End-to-end behaviour against the ~50-submission corpus, using a real embedding model.
+
+Probe texts live in data/probes.json and are disjoint from the corpus and calibration anchors.
+"""
+
+import pytest
+
+from novelty.models import Stance, Submission
+
+NOVEL_MIN = 0.6  # truly novel, relevant submissions must earn at least this
+NOT_NOVEL_MAX = 0.25  # copies and paraphrases of existing takes must earn at most this
+UNREWARDED = 0.01  # off-topic submissions earn (effectively) nothing
+
+
+
+# ---------------------------------------------------------------- the four required behaviours
+
+
+@pytest.mark.parametrize("idx", range(3))
+def test_truly_novel_relevant_content_is_rewarded(scorer, probes, idx):
+    sub = probes["novel_relevant"][idx]
+    r = scorer.score(sub)
+    assert r.score >= NOVEL_MIN, (sub.id, r)
+    assert r.relevance_gate == 1.0
+
+
+@pytest.mark.parametrize("idx", range(5))
+def test_non_novel_content_is_not_rewarded(scorer, probes, idx):
+    sub = probes["duplicates"][idx]
+    r = scorer.score(sub)
+    assert r.score <= NOT_NOVEL_MAX, (sub.id, r)
+    assert r.relevance_gate > 0.9, "these are on-topic: the low score must come from novelty"
+
+
+@pytest.mark.parametrize("idx", range(3))
+def test_high_novelty_but_low_relevance_is_not_rewarded(scorer, probes, idx):
+    sub = probes["off_topic"][idx]
+    r = scorer.score(sub)
+    assert r.novelty >= 0.8, "off-topic text is maximally unlike the corpus, i.e. highly 'novel'"
+    assert r.relevance_margin <= 0.0
+    assert r.score <= UNREWARDED, (sub.id, r)
+
+
+def test_same_town_different_subject_is_not_rewarded(scorer, probes):
+    """The hard case: shares the locale and comment genre but not the subject."""
+    football = next(p for p in probes["off_topic"] if p.id == "o_football")
+    r = scorer.score(football)
+    assert r.novelty >= 0.8
+    assert r.score <= UNREWARDED
+
+
+def test_every_novel_submission_outranks_every_other_probe(scorer, probes):
+    novel = [scorer.score(s).score for s in probes["novel_relevant"]]
+    others = [scorer.score(s).score for g in ("duplicates", "off_topic") for s in probes[g]]
+    assert min(novel) > max(others) + 0.3
+
+
+# ---------------------------------------------------------------- specific non-novelty tactics
+
+
+def test_verbatim_copy_with_light_edits_scores_zero(scorer, probes):
+    copy = next(p for p in probes["duplicates"] if p.id == "d_copy")
+    r = scorer.score(copy)
+    assert r.near_duplicate_of == "c01"
+    assert r.score == 0.0
+
+
+def test_changing_only_the_stance_does_not_make_a_copy_novel(scorer, probes):
+    flipped = next(p for p in probes["duplicates"] if p.id == "d_stance_flip")
+    assert flipped.stance is Stance.UNDECIDED  # the rarest stance in the corpus
+    r = scorer.score(flipped)
+    assert r.stance_rarity > 0.5
+    assert r.score == 0.0
+
+
+def test_padding_a_copy_with_extra_words_is_still_a_copy(scorer):
+    original = scorer.corpus[26]  # c27
+    padded = Submission(
+        headline=original.headline + "!!",
+        body="Honestly I have to say this. " + original.body + " Just my two cents.",
+        stance=Stance.SUPPORT,
+    )
+    assert scorer.score(padded).near_duplicate_of == original.id
+
+
+# ---------------------------------------------------------------- relative to the corpus over time
+
+
+def test_novelty_is_relative_to_what_has_been_submitted(scorer, probes):
+    """Once a new idea is in the corpus, the next person to submit it is no longer novel."""
+    first = probes["novel_relevant"][0]  # stormwater / flooding idea
+    second = Submission(
+        headline="Make the new park a stormwater sponge",
+        body="Rain gardens and an underground storage tank in the park would stop Elm Street basements "
+        "flooding every spring and ease the pressure on the storm drains and sewer.",
+        stance=Stance.SUPPORT,
+    )
+    before = scorer.score(second).score
+    assert scorer.submit(first).score >= NOVEL_MIN
+    after = scorer.score(second).score
+    assert before >= NOVEL_MIN
+    assert after <= NOT_NOVEL_MAX
+
+
+def test_off_topic_spam_does_not_redefine_the_topic(scorer, probes):
+    for i in range(20):
+        spam = Submission(
+            headline=f"Best sourdough tip #{i}",
+            body=f"Feed your starter rye flour and keep it at {20 + i} degrees for a better rise and crumb.",
+            stance=Stance.SUPPORT,
+        )
+        assert scorer.submit(spam).score <= UNREWARDED
+    for sub in probes["novel_relevant"]:
+        assert scorer.score(sub).score >= NOVEL_MIN
+    for sub in probes["off_topic"]:
+        assert scorer.score(sub).score <= UNREWARDED
+
+
+def test_crowded_takes_are_less_novel_than_one_off_takes_within_the_corpus(scorer):
+    loo = scorer.corpus_novelty()
+    crowded = ["c04", "c09", "c10", "c20"]  # "parking kills Main Street", "too expensive"
+    one_off = ["c49", "c50", "c22"]  # rushed vote, farmers market, cost overruns
+    assert max(loo[c] for c in crowded) < min(loo[c] for c in one_off)
+
+
+def test_relevance_gate_keeps_nearly_all_genuine_responses(scorer):
+    """The gate must not be so strict that ordinary on-topic comments lose their reward."""
+    relevance = scorer.corpus_relevance()
+    passing = [c for c, r in relevance.items() if r >= scorer.config.relevance_full]
+    assert len(passing) / len(relevance) >= 0.9
+    assert all(r > scorer.config.relevance_floor for r in relevance.values())
+
+
+def test_all_scores_are_normalised(scorer, probes):
+    for group in probes.values():
+        for sub in group:
+            r = scorer.score(sub)
+            assert 0.0 <= r.score <= 1.0

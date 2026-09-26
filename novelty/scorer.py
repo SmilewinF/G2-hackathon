@@ -2,7 +2,8 @@
 
     score = novelty × relevance_gate            (both in [0, 1])
 
-Novelty is measured *relative to the existing corpus*; relevance *relative to the topic* (the
+Novelty is measured *relative to the existing corpus*, using hybrid (embedding + TF-IDF)
+similarity to the nearest existing submissions; relevance *relative to the topic* (the
 fixed content plus accepted on-topic responses). Both are self-calibrating: instead of hard-coded
 cosine thresholds (which differ per embedding model), each raw signal is normalised against a
 reference distribution computed from the data itself, so the pipeline behaves the same on the
@@ -18,13 +19,14 @@ from typing import Sequence
 import numpy as np
 
 from .embeddings import Embedder
-from .lexical import containment, shingles
+from .lexical import TfidfIndex, containment, shingles
 from .models import FixedContent, Neighbor, ScoreBreakdown, Stance, Submission
 
 
 @dataclass(frozen=True)
 class ScorerConfig:
     k: int = 5  # neighbourhood size for the local-density term
+    dense_weight: float = 0.6  # hybrid similarity = w * embedding cosine + (1 - w) * TF-IDF cosine
     nearest_weight: float = 0.5  # blend of nearest-neighbour distance vs. mean top-k distance
     stance_weight: float = 0.1  # max share of novelty that stance rarity can move
     relevance_floor: float = 0.1  # calibrated relevance at/below which reward is 0
@@ -69,6 +71,7 @@ class NoveltyScorer:
         self._corpus: list[Submission] = []
         self._shingles: list[frozenset[str]] = []
         self._topic_member: list[bool] = []
+        self._tfidf = TfidfIndex()
         self._matrix = np.empty((0, vecs.shape[1]), dtype=np.float32)
         self._add_many(list(corpus), on_topic=True)
 
@@ -97,6 +100,7 @@ class NoveltyScorer:
         self._corpus.extend(subs)
         self._shingles.extend(shingles(s.text) for s in subs)
         self._topic_member.extend([on_topic] * len(subs))
+        self._tfidf.add([s.text for s in subs])
         self._matrix = np.vstack([self._matrix, vecs])
         self._calibrate()
 
@@ -104,7 +108,7 @@ class NoveltyScorer:
         """Recompute the reference distributions that make raw signals comparable."""
         # Novelty: leave-one-out raw novelty of every corpus item vs. the rest. Median/MAD are
         # robust to the corpus's own outliers and near-duplicates.
-        sims = self._matrix @ self._matrix.T
+        sims = self._hybrid(self._matrix @ self._matrix.T, self._tfidf.pairwise())
         np.fill_diagonal(sims, -np.inf)
         loo = np.array([self._raw_novelty(row) for row in sims])
         self._loo_raw = loo
@@ -126,6 +130,10 @@ class NoveltyScorer:
         self._stance_p = {s: (c + 1) / total for s, c in counts.items()}  # Laplace-smoothed
 
     # ------------------------------------------------------------------ signals
+
+    def _hybrid(self, dense: np.ndarray, lexical: np.ndarray) -> np.ndarray:
+        w = self.config.dense_weight
+        return w * dense + (1.0 - w) * lexical
 
     def _raw_novelty(self, sims: np.ndarray) -> float:
         top = np.sort(sims)[::-1][: self.config.k]
@@ -149,7 +157,7 @@ class NoveltyScorer:
     def score(self, sub: Submission) -> ScoreBreakdown:
         cfg = self.config
         vec = self.embedder.embed([sub.text])[0]
-        sims = self._matrix @ vec
+        sims = self._hybrid(self._matrix @ vec, self._tfidf.similarities(sub.text))
         order = np.argsort(sims)[::-1][: cfg.k]
         nearest = [Neighbor(self._corpus[i].id, round(float(sims[i]), 4)) for i in order]
         reasons: list[str] = []

@@ -83,7 +83,7 @@ class ScoreBreakdown:
     score: float  # final reward in [0, 1] = novelty * relevance_gate
     novelty: float  # [0, 1], semantic novelty adjusted by stance rarity
     semantic_novelty: float  # [0, 1], robust z-score of raw novelty vs. the corpus, via normal CDF
-    raw_novelty: float  # blended cosine distance to nearest neighbours (uncalibrated)
+    raw_novelty: float  # blended hybrid-similarity distance to nearest neighbours (uncalibrated)
     stance_rarity: float  # [0, 1], 0 = most common stance in the corpus
     relevance: float  # [0, 1], margin / typical on-topic margin
     relevance_margin: float  # sim(topic) - sim(generic chatter); <= 0 means off-topic
