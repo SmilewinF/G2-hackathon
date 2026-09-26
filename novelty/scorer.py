@@ -104,13 +104,18 @@ class NoveltyScorer:
         return next(s for s in self.signals if s.name == name)
 
     def add(self, sub: Submission, on_topic: bool = True) -> None:
-        """Add a submission to the reference corpus without scoring it (e.g. replaying saved ones)."""
+        """Add a submission to the reference corpus without scoring it."""
         self._add([sub], on_topic)
 
+    def add_many(self, subs: Sequence[Submission], on_topic: bool = True) -> None:
+        """Add several submissions with a single recalibration (e.g. replaying saved ones)."""
+        if subs:
+            self._add(list(subs), on_topic)
+
     def _add(self, subs: list[Submission], on_topic: bool) -> None:
-        self.index.add(subs, on_topic=on_topic)
+        added = self.index.add(subs, on_topic=on_topic)
         for s in self.signals:
-            s.fit(self.index)
+            s.update(self.index, added)
 
     def admission(self, result: ScoreBreakdown) -> tuple[bool, str]:
         """Only content that could ever earn a reward becomes reference data."""

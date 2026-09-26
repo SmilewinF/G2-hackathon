@@ -14,6 +14,10 @@ class WholeTextNovelty(Signal):
     raw = w × (1 − nearest similarity) + (1 − w) × (1 − mean top-k similarity), on hybrid
     similarity; calibrated against every corpus item's leave-one-out raw value (median / MAD →
     normal CDF). 0.5 = as novel as a typical existing submission.
+
+    Calibration keeps each entry's top-k neighbour similarities. Inserting entry j only needs
+    j's similarity row (O(n)) and a vectorised top-k merge for the rows j beats; a full rebuild
+    happens only when the index's lexical vectors were refit.
     """
 
     name = "whole_text"
@@ -22,20 +26,52 @@ class WholeTextNovelty(Signal):
     def __init__(self, k: int = 5, nearest_weight: float = 0.5) -> None:
         self.k = k
         self.nearest_weight = nearest_weight
+        self._version: int | None = None
+
+    def _raw_top(self, top: np.ndarray) -> np.ndarray:
+        w = self.nearest_weight
+        return w * (1.0 - top[..., 0]) + (1.0 - w) * (1.0 - top.mean(axis=-1))
 
     def raw(self, sims: np.ndarray) -> float:
-        top = np.sort(sims)[::-1][: self.k]
-        w = self.nearest_weight
-        return w * (1.0 - float(top[0])) + (1.0 - w) * (1.0 - float(np.mean(top)))
+        return float(self._raw_top(np.sort(sims)[::-1][: self.k]))
+
+    def _top(self, row: np.ndarray) -> np.ndarray:
+        k = self.k
+        if len(row) <= k:
+            return np.sort(row)[::-1]
+        return np.sort(row[np.argpartition(row, -k)[-k:]])[::-1]
 
     def fit(self, index: ReferenceIndex) -> None:
-        subs = index.submission_indices
-        if len(subs) <= self.k:
+        if len(index.submission_indices) <= self.k:
             raise ValueError(f"corpus needs more than k={self.k} submissions")
-        sims = index.pairwise()
-        np.fill_diagonal(sims, -np.inf)
-        self.loo = {index.entries[i].id: self.raw(sims[i]) for i in subs}
-        self.scale = RobustScale.fit(np.array(list(self.loo.values())))
+        self._topk = np.full((len(index), self.k), -np.inf)
+        for i in range(len(index)):
+            row = index.entry_sims(i)
+            row[i] = -np.inf
+            self._topk[i] = self._top(row)
+        self._version = index.version
+        self._finish(index)
+
+    def update(self, index: ReferenceIndex, added: range) -> None:
+        if self._version != index.version:
+            return self.fit(index)
+        self._topk = np.vstack([self._topk, np.full((len(added), self.k), -np.inf)])
+        for j in added:
+            s = index.entry_sims(j)[:j]  # similarity to entries inserted before j
+            self._topk[j] = self._top(s)
+            old = self._topk[:j]
+            beats = s > old[:, -1]
+            if beats.any():
+                merged = np.concatenate([old[beats], s[beats, None]], axis=1)
+                merged.sort(axis=1)
+                old[beats] = merged[:, ::-1][:, : self.k]
+        self._finish(index)
+
+    def _finish(self, index: ReferenceIndex) -> None:
+        subs = index.submission_indices
+        raw = self._raw_top(self._topk[subs])
+        self.loo = {index.entries[i].id: float(r) for i, r in zip(subs, raw)}
+        self.scale = RobustScale.fit(raw)
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         raw = self.raw(a.sims)
@@ -56,21 +92,51 @@ class ClauseCoverage(Signal):
     stock take padded with unrelated text. Scoring each clause against the corpus and keeping the
     most novel on-topic one fixes both: every clause of a kitchen-sink comment is already covered,
     and padding is off-topic so it cannot supply the novelty.
+
+    Calibration keeps each stored clause's best similarity to any *other* entry; inserting entry
+    j is one clause-column (O(clauses)) plus rows for j's own clauses.
     """
 
     name = "clause_coverage"
     kind = Kind.NOVELTY
 
+    def __init__(self) -> None:
+        self._version: int | None = None
+
+    def _clause_best(self, index: ReferenceIndex, c: int) -> float:
+        s = index.clause_sims(c)
+        s[index.clause_owner[c]] = -np.inf  # leave-one-out: a clause is trivially covered by its own comment
+        return float(s.max())
+
+    def _calibrated(self, index: ReferenceIndex, c: int) -> bool:
+        return index.clause_substantive[c] and index.entries[index.clause_owner[c]].is_submission
+
     def fit(self, index: ReferenceIndex) -> None:
-        raws = []
-        for i in index.submission_indices:
-            e = index.entries[i]
-            if not e.clauses:
-                continue
-            sims = index.clause_sims_of(i)
-            sims[:, i] = -np.inf  # leave-one-out: a clause is trivially covered by its own comment
-            raws.extend(1.0 - sims.max(axis=1)[np.array(e.substantive)])
-        self.scale = RobustScale.fit(np.array(raws))
+        n = len(index.clause_owner)
+        self._best = np.full(n, -np.inf)
+        self._mask = np.array([self._calibrated(index, c) for c in range(n)], dtype=bool)
+        for c in np.flatnonzero(self._mask):
+            self._best[c] = self._clause_best(index, c)
+        self._version = index.version
+        self._finish(index)
+
+    def update(self, index: ReferenceIndex, added: range) -> None:
+        if self._version != index.version:
+            return self.fit(index)
+        before = len(self._best)
+        total = len(index.clause_owner)
+        self._best = np.concatenate([self._best, np.full(total - before, -np.inf)])
+        new_mask = np.array([self._calibrated(index, c) for c in range(before, total)], dtype=bool)
+        self._mask = np.concatenate([self._mask, new_mask])
+        for j in added:  # existing clauses gain one more entry they may be covered by
+            col = index.clause_sims_to_entry(j)[:before]
+            np.maximum(self._best[:before], col, out=self._best[:before])
+        for c in before + np.flatnonzero(new_mask):  # new clauses: best match among all other entries
+            self._best[c] = self._clause_best(index, c)
+        self._finish(index)
+
+    def _finish(self, index: ReferenceIndex) -> None:
+        self.scale = RobustScale.fit(1.0 - self._best[self._mask])
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         substantive = np.array(a.substantive, dtype=bool)

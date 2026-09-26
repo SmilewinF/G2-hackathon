@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from ..index import ARTICLE_ID, Analysis, ReferenceIndex
 from ..models import Stance
 from ..text import STOPWORDS, containment, distinct_share, tokens, words
@@ -19,12 +21,21 @@ class DuplicateCheck(Signal):
     name = "duplicate"
     kind = Kind.MODIFIER
 
-    def __init__(self, threshold: float = 0.6) -> None:
+    def __init__(self, threshold: float = 0.6, candidates: int = 25) -> None:
         self.threshold = threshold
+        self.candidates = candidates
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
+        # A copy is necessarily among the most similar entries, so only those (and the article)
+        # need the exact shingle check: O(candidates) instead of O(corpus) set intersections.
+        n = len(index.entries)
+        if n > self.candidates:
+            pool = set(np.argpartition(a.sims, -self.candidates)[-self.candidates:].tolist()) | {0}
+        else:
+            pool = range(n)
         best_id, best = None, 0.0
-        for e in index.entries:
+        for i in pool:
+            e = index.entries[i]
             c = containment(a.shingles, e.shingles)
             if c > best:
                 best_id, best = e.id, c

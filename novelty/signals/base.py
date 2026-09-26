@@ -52,7 +52,12 @@ class Signal(ABC):
     kind: Kind
 
     def fit(self, index: ReferenceIndex) -> None:
-        """Recalibrate against the current reference index. Called after every change to it."""
+        """Calibrate from scratch against the current reference index."""
+
+    def update(self, index: ReferenceIndex, added: range) -> None:
+        """Recalibrate after entries ``added`` were inserted. Defaults to a full ``fit``; signals
+        with expensive calibration override it with an incremental update."""
+        self.fit(index)
 
     @abstractmethod
     def evaluate(self, analysis: Analysis, index: ReferenceIndex) -> SignalResult: ...

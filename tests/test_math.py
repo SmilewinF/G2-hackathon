@@ -178,3 +178,44 @@ def test_custom_signals_plug_into_the_pipeline(toy_scorer):
 def test_signal_results_outside_unit_interval_are_rejected():
     with pytest.raises(ValueError):
         SignalResult(1.5)
+
+
+# ---------------------------------------------------------------- incremental calibration
+
+
+def test_incremental_calibration_matches_a_full_refit():
+    """update() must reach exactly the state fit() would compute on the same index."""
+    import copy
+
+    scorer = NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS)
+    for i in range(3):  # stays below the TF-IDF refit threshold, so every update is incremental
+        scorer.add(Submission(headline=f"Extra {i}", body=f"The garage could host market stall number {i} "
+                              f"with the downtown council support every weekend.", stance="mixed", id=f"e{i}"))
+    version = scorer.index.version
+    for name in ("whole_text", "clause_coverage", "relevance"):
+        incremental = scorer.signal(name)
+        full = copy.copy(incremental)
+        full.fit(scorer.index)
+        for attr in ("scale", "loo", "on_topic_margin"):
+            if hasattr(incremental, attr):
+                a, b = getattr(incremental, attr), getattr(full, attr)
+                if isinstance(a, dict):
+                    assert a.keys() == b.keys()
+                    assert all(a[k] == pytest.approx(b[k], abs=1e-9) for k in a), (name, attr)
+                elif isinstance(a, float):
+                    assert a == pytest.approx(b, abs=1e-9), (name, attr)
+                else:
+                    assert a.median == pytest.approx(b.median, abs=1e-9) and a.scale == pytest.approx(b.scale, abs=1e-9)
+    assert scorer.index.version == version, "test assumption: no TF-IDF refit happened"
+
+
+def test_tfidf_refits_periodically_not_on_every_insert():
+    scorer = NoveltyScorer(load_fixed_content(), _corpus(), HashEmbedder(), ANCHORS)
+    v0 = scorer.index.version
+    versions = []
+    for i in range(10):
+        scorer.add(Submission(headline=f"More {i}", body=f"The council plan for the garage is idea {i} about "
+                              f"the downtown park.", stance="support", id=f"m{i}"))
+        versions.append(scorer.index.version)
+    refits = len(set(versions) - {v0})
+    assert 1 <= refits <= 5, versions  # 13 -> 23 entries in 10% growth steps: refits at 15, 17, 19, 21

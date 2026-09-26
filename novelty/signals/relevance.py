@@ -32,15 +32,18 @@ class TopicMargin(Signal):
         self.min_on_topic_margin = min_on_topic_margin
 
     def fit(self, index: ReferenceIndex) -> None:
-        topic = index.topic_sum()
-        self.loo = {}
-        for i in index.submission_indices:
-            e = index.entries[i]
-            if e.on_topic:
-                v = index.content_vec(i)
-                self.loo[e.id] = float(index.margin(v[None, :], topic - v)[0])
-        if not self.loo:
+        subs = index.submission_indices
+        members = subs[index.on_topic_mask[subs]]
+        if len(members) == 0:
             raise CalibrationError("no on-topic submissions to calibrate relevance against")
+        # Leave-one-out margin of every member at once: v·unit(T − v) − v·g, using
+        # ‖T − v‖² = ‖T‖² − 2 T·v + ‖v‖² instead of one centroid per member.
+        topic = index.topic_sum().astype(np.float64)
+        v = index.content[members].astype(np.float64)
+        tv, vv = v @ topic, np.einsum("ij,ij->i", v, v)
+        norms = np.sqrt(np.maximum(topic @ topic - 2 * tv + vv, 1e-24))
+        margins = (tv - vv) / norms - v @ index.generic_vec
+        self.loo = {index.entries[i].id: float(m) for i, m in zip(members, margins)}
         self.on_topic_margin = float(np.median(list(self.loo.values())))
         if self.on_topic_margin < self.min_on_topic_margin:
             raise CalibrationError(
