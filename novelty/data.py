@@ -21,6 +21,7 @@ from typing import Any
 
 from .embeddings import Embedder, default_embedder
 from .errors import DataError, ValidationError
+from .index import ARTICLE_ID
 from .models import FixedContent, Stance, Submission
 from .scorer import NoveltyScorer, ScorerConfig
 
@@ -133,11 +134,39 @@ def load_examples() -> dict[str, list[dict]]:
     return examples
 
 
-def load_user_submissions(path: Path = USER_FILE, admitted_only: bool = True) -> list[Submission]:
-    """Submissions saved by the web UI. Read-only: unlike the server, it never moves the file.
+RESERVED_IDS = frozenset({ARTICLE_ID})  # entry ids the index uses itself
 
-    Invalid records are skipped with a warning, so one hand-edited record cannot hide the rest.
-    """
+
+def replayable_submissions(records: list, source: str, reserved: set[str] | frozenset[str] = frozenset(),
+                           admitted_only: bool = True) -> list[Submission]:
+    """The saved web-UI records that can be added back to a corpus: objects with ``admitted`` set
+    to true (the JSON value, not any truthy one), a valid submission, and an id that is not
+    reserved (the article's, the seed corpus's) or repeated. Every other record is skipped with a
+    warning: one hand-edited record must neither hide the rest nor stop the server from starting."""
+    subs, seen = [], set(reserved) | RESERVED_IDS
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict) or (admitted_only and rec.get("admitted") is not True):
+            continue
+        try:
+            sub = Submission.from_dict(rec)
+        except ValidationError as e:
+            log.warning("skipping %s item %d (%s): %s", source, i, _item_id(rec), e)
+            continue
+        if sub.id is None:
+            log.warning("skipping %s item %d: it has no id", source, i)
+            continue
+        if sub.id in seen:
+            log.warning("skipping %s item %d: duplicate or reserved id %r", source, i, sub.id)
+            continue
+        seen.add(sub.id)
+        subs.append(sub)
+    return subs
+
+
+def load_user_submissions(path: Path = USER_FILE, admitted_only: bool = True,
+                          reserved: set[str] | frozenset[str] = frozenset()) -> list[Submission]:
+    """Submissions saved by the web UI (see ``replayable_submissions``). Read-only: unlike the
+    server, it never moves the file."""
     if not path.exists():
         return []
     try:
@@ -146,29 +175,19 @@ def load_user_submissions(path: Path = USER_FILE, admitted_only: bool = True) ->
         raise DataError(f"{path.name} is unreadable: {e}") from None
     if not isinstance(records, list):
         raise DataError(f"{path.name} must contain a JSON list")
-    subs, seen = [], set()
-    for i, rec in enumerate(records):
-        if not isinstance(rec, dict) or (admitted_only and not rec.get("admitted")):
-            continue
-        try:
-            sub = Submission.from_dict(rec)
-        except ValidationError as e:
-            log.warning("skipping %s item %d (%s): %s", path.name, i, _item_id(rec), e)
-            continue
-        if sub.id in seen:
-            log.warning("skipping %s item %d: duplicate id %r", path.name, i, sub.id)
-            continue
-        seen.add(sub.id)
-        subs.append(sub)
-    return subs
+    return replayable_submissions(records, path.name, reserved, admitted_only)
 
 
 def write_json_atomic(path: Path, data: Any) -> None:
-    """Write ``data`` as indented JSON (plus a trailing newline) via ``<name>.tmp`` and
-    ``os.replace``, so a crash mid-write cannot leave a truncated file. ``OSError`` propagates;
-    the caller decides whether a failed write is fatal."""
+    """Write ``data`` as indented UTF-8 JSON (plus a trailing newline) via ``<name>.tmp``, fsync
+    and ``os.replace``, so neither a crash nor a power cut mid-write can leave a truncated file.
+    ``OSError`` propagates; the caller decides whether a failed write is fatal."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # ensure_ascii=False: escaped non-ASCII took 6 bytes a character (5,000 records were 61 MB).
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
 
 
@@ -182,8 +201,7 @@ def build_scorer(
     """Scorer over the seed corpus, optionally plus the web UI's admitted submissions."""
     corpus = load_corpus()
     if include_user_submissions:
-        seed_ids = {s.id for s in corpus}
-        extra = [s for s in load_user_submissions(user_file) if s.id not in seed_ids]
+        extra = load_user_submissions(user_file, reserved={s.id for s in corpus})
         if extra:
             log.info("including %d user submission(s) from %s", len(extra), user_file.name)
         corpus += extra

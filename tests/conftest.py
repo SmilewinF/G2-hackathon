@@ -17,14 +17,16 @@ from novelty.server import App, make_handler  # noqa: E402
 
 def pytest_report_header(config):
     if TEST_CORPUS == "seed":
-        return "novelty test corpus: 50 seed comments only (NOVELTY_TEST_CORPUS=seed)"
+        return "novelty test corpus: 50 seed comments (set NOVELTY_TEST_CORPUS=full to add the web-UI submissions)"
     return (f"novelty test corpus: seed comments + {len(USER_SUBMISSIONS)} admitted web-UI submission(s) "
-            f"from data/user_submissions.json (set NOVELTY_TEST_CORPUS=seed to exclude them)")
+            f"from data/user_submissions.json (results depend on those submissions)")
 
 
 @pytest.fixture(scope="session")
 def embedder():
-    return default_embedder()
+    emb = default_embedder()
+    yield emb
+    emb.close()
 
 
 @pytest.fixture(scope="session")
@@ -66,3 +68,4 @@ def base_url(app):
     threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
+    httpd.server_close()  # the listening socket otherwise leaks (ResourceWarning)

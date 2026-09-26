@@ -6,6 +6,7 @@ import numpy as np
 
 from ..errors import CalibrationError
 from ..index import Analysis, ReferenceIndex
+from ..text import specific_words, words
 from .base import Kind, RobustScale, Signal, SignalResult
 
 
@@ -112,7 +113,17 @@ class ClauseCoverage(Signal):
     kind = Kind.NOVELTY
     scale: RobustScale  # calibration of 1 - best clause similarity, set by fit()/update()
 
-    def __init__(self) -> None:
+    def __init__(self, min_relevance: float = 0.5, min_specific: int = 2) -> None:
+        """A clause is on-topic when its own relevance (``Analysis.clause_relevance``, from the
+        configured relevance signals) is above ``min_relevance``. It used to be "contrastive topic
+        margin > 0", which every same-town comment passes: "feral cats" clauses then supplied the
+        novelty for an off-topic comment with one appended stock line about the garage (0.89).
+
+        Only clauses with at least ``min_specific`` specific content words can supply the novelty
+        (unless none has): a vague fragment ("it costs too much") matches no whole comment closely,
+        so it read as the kitchen-sink comment's "new" clause."""
+        self.min_relevance = min_relevance
+        self.min_specific = min_specific
         self._version: int | None = None
 
     def _clause_best(self, index: ReferenceIndex, c: int) -> float:
@@ -141,9 +152,9 @@ class ClauseCoverage(Signal):
         self._best = np.concatenate([self._best, np.full(total - before, -np.inf)])
         new_mask = np.array([self._in_calibration_set(index, c) for c in range(before, total)], dtype=bool)
         self._mask = np.concatenate([self._mask, new_mask])
-        for j in added:  # existing clauses gain one more entry they may be covered by
+        for j in added:  # existing calibration clauses gain one more entry they may be covered by
             col = index.clause_sims_to_entry(j)[:before]
-            np.maximum(self._best[:before], col, out=self._best[:before])
+            np.maximum(self._best[:before], col, out=self._best[:before], where=self._mask[:before])
         for c in before + np.flatnonzero(new_mask):  # new clauses: best match among all other entries
             self._best[c] = self._clause_best(index, c)
         self._finish(index)
@@ -154,13 +165,24 @@ class ClauseCoverage(Signal):
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         substantive = np.array(a.substantive, dtype=bool)
         if not substantive.any():
-            return SignalResult(0.0, ["no substantive clause to assess"], {"clause": None, "applied": True})
+            return SignalResult(0.0, ["no substantive clause to assess"],
+                                {"clause": None, "applied": True, "on_topic_share": 0.0})
+        if a.clause_relevance is not None:
+            on_topic = substantive & (a.clause_relevance > self.min_relevance)
+        else:  # no relevance signal judges clauses: fall back to the contrastive margin
+            on_topic = substantive & (a.clause_margins > 0)
+        lengths = np.array([len(words(c)) for c in a.clauses], dtype=float)
+        # Share of the substantive words that sit in clauses on-topic by themselves; the admission
+        # policy uses it, so off-topic text with one appended line about the garage is not learned from.
+        share = float(lengths[on_topic].sum() / max(lengths[substantive].sum(), 1.0))
         if substantive.sum() < 2:
             # One clause *is* the whole text, which WholeTextNovelty already scores. Clause-vs-
             # comment similarity is unreliable for a lone short clause (a concise new idea
             # shares its topic words with longer comments), so stay neutral in the min().
-            return SignalResult(1.0, [], {"clause": None, "applied": False})
-        on_topic = substantive & (a.clause_margins > 0)
+            return SignalResult(1.0, [], {"clause": None, "applied": False, "on_topic_share": share})
+        concrete = np.array([len(specific_words(c)) >= self.min_specific for c in a.clauses], dtype=bool)
+        if (substantive & concrete).any():
+            substantive, on_topic = substantive & concrete, on_topic & concrete
         # With no on-topic clause, fall back to all substantive ones: novelty stays a pure
         # "is it new" measure and the relevance gate is what zeroes off-topic content.
         eligible = np.flatnonzero(on_topic if on_topic.any() else substantive)
@@ -170,4 +192,4 @@ class ClauseCoverage(Signal):
         reasons = []
         if len(eligible) > 1 and values[best] < 0.5:
             reasons.append("every on-topic clause is already covered by existing submissions")
-        return SignalResult(values[best], reasons, {"clause": clause, "applied": True})
+        return SignalResult(values[best], reasons, {"clause": clause, "applied": True, "on_topic_share": share})

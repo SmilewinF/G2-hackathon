@@ -141,8 +141,8 @@ class _Broken:
     _Broken(result=lambda n: [["x"] * 4] * n),
 ])
 def test_malformed_vectors_raise_embedding_error(tmp_path, inner):
-    with pytest.raises(EmbeddingError):
-        CachedEmbedder(inner, tmp_path).embed(["some text"])
+    with CachedEmbedder(inner, tmp_path) as emb, pytest.raises(EmbeddingError):
+        emb.embed(["some text"])
 
 
 def test_cache_write_failure_does_not_fail_the_request(tmp_path, caplog):
@@ -157,6 +157,7 @@ def test_cache_write_failure_does_not_fail_the_request(tmp_path, caplog):
         def executemany(self, *args):
             raise sqlite3.OperationalError("disk I/O error")
 
+    emb.close()
     emb._db = ReadOnlyDb()
     with caplog.at_level(logging.WARNING, logger="novelty.embeddings"):
         vecs = emb.embed(["the garage park", "another text"])
@@ -174,15 +175,15 @@ def test_unusable_cache_directory_degrades_to_memory(tmp_path, caplog):
 
 
 def test_cache_counts_hits_and_misses(tmp_path):
-    emb = CachedEmbedder(HashEmbedder(), tmp_path)
-    emb.embed(["a b", "c d"])
-    emb.embed(["a b", "e f"])
+    with CachedEmbedder(HashEmbedder(), tmp_path) as emb:
+        emb.embed(["a b", "c d"])
+        emb.embed(["a b", "e f"])
     assert (emb.misses, emb.hits) == (3, 1)
 
 
 def test_build_scorer_keeps_the_given_embedder_even_with_an_empty_cache(tmp_path):
-    emb = CachedEmbedder(HashEmbedder(), tmp_path)  # empty cache: len(emb) == 0, so emb is falsy
-    assert data.build_scorer(emb).embedder is emb
+    with CachedEmbedder(HashEmbedder(), tmp_path) as emb:  # empty cache: len(emb) == 0, so emb is falsy
+        assert data.build_scorer(emb).embedder is emb
 
 
 def test_write_json_atomic_writes_indented_json_and_no_temp_file(tmp_path):

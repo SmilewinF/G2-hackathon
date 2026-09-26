@@ -70,6 +70,12 @@ def configure_logging(level: str | int | None = None, log_file: str | None = Non
     return logger
 
 
+def printable(text: str) -> str:
+    """``text`` with newlines, control characters and other unprintable ones escaped, so user input
+    cannot forge a log line or send terminal escape sequences."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in text)
+
+
 def preview(text: str, limit: int = 60) -> str:
     """One-line, length-limited rendering of user text for log messages."""
     flat = " ".join(text.split())

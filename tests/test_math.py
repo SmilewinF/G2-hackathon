@@ -1,6 +1,7 @@
 """Model-free checks of the scoring primitives and the pipeline's structural guarantees."""
 
 import copy
+import logging
 import math
 
 import numpy as np
@@ -12,7 +13,7 @@ from novelty.data import load_fixed_content
 from novelty.models import Stance, Submission
 from novelty.scorer import NoveltyScorer, ScorerConfig, default_signals
 from novelty.signals import CalibrationError, Kind, RobustScale, Signal, SignalResult, WholeTextNovelty, normal_cdf, smoothstep
-from novelty.text import clauses, containment, is_substantive, normalize, shingles
+from novelty.text import clause_spans, clauses, containment, fold, is_generic, is_substantive, normalize, shingles
 
 
 def test_smoothstep_is_zero_below_floor_and_one_above_full():
@@ -31,6 +32,27 @@ def test_robust_scale_has_a_floor_for_constant_distributions():
     scale = RobustScale.fit(np.array([0.2] * 20))
     assert scale.scale > 0
     assert 0.0 < scale(0.21) < 1.0  # no division blow-up into exactly 0/1 for tiny differences
+
+
+def test_normalize_removes_every_format_character_and_lone_surrogates():
+    # bidi isolates, a tag character and a lone surrogate were kept; each split a word in two
+    assert normalize("pa\u2066rk\u2069 pl\U000e0041an\ud800 \u034fnow") == "park plan now"
+    assert normalize("café") == "café", "accents are display text; only matching folds them"
+    assert fold("Thė gȧragė") == "the garage"
+
+
+def test_clause_spans_locate_every_clause():
+    text = "Parking loss hurts shops, the park helps families. Trees cool it down, ok, and so on."
+    spans = clause_spans(text)
+    assert [c for c, _, _ in spans] == clauses(text)
+    for clause, start, end in spans:
+        assert text[start:end].split()[0] == clause.split()[0] and text[start:end].split()[-1] == clause.split()[-1]
+
+
+@pytest.mark.parametrize("word, generic", [("loved", True), ("agreed", True), ("ideas", True), ("loving", True),
+                                           ("greatly", True), ("fines", False), ("garage", False), ("lovely", True)])
+def test_inflections_of_generic_words_are_generic(word, generic):
+    assert is_generic(word) is generic
 
 
 def test_containment_detects_copies_and_padded_copies():
@@ -153,28 +175,55 @@ def test_signal_results_outside_unit_interval_are_rejected():
 # ---------------------------------------------------------------- incremental calibration
 
 
-def test_incremental_calibration_matches_a_full_refit():
-    """update() must reach exactly the state fit() would compute on the same index."""
-    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS)
-    for i in range(3):  # 14 entries: incremental; 15: TF-IDF refit, so the novelty signals re-fit; 16: incremental again
-        scorer.add(Submission(headline=f"Extra {i}", body=f"The garage could host market stall number {i} "
-                              f"with the downtown council support every weekend.", stance="mixed", id=f"e{i}"))
-    version = scorer.index.version
-    for name in ("whole_text", "clause_coverage", "relevance"):
-        incremental = scorer.signal(name)
-        full = copy.copy(incremental)
-        full.fit(scorer.index)
-        for attr in ("scale", "loo", "on_topic_margin"):
-            if hasattr(incremental, attr):
-                a, b = getattr(incremental, attr), getattr(full, attr)
-                if isinstance(a, dict):
-                    assert a.keys() == b.keys()
-                    assert all(a[k] == pytest.approx(b[k], abs=1e-9) for k in a), (name, attr)
-                elif isinstance(a, float):
-                    assert a == pytest.approx(b, abs=1e-9), (name, attr)
-                else:
-                    assert a.median == pytest.approx(b.median, abs=1e-9) and a.scale == pytest.approx(b.scale, abs=1e-9)
-    assert scorer.index.version == version, "a full fit() must not refit the index's TF-IDF"
+def _assert_same_state(a, b, where):
+    """Every calibrated attribute of two signal objects is equal (arrays and floats to 1e-9)."""
+    if isinstance(a, np.ndarray):
+        assert a.shape == b.shape and np.allclose(a, b, rtol=0, atol=1e-9, equal_nan=True), where
+    elif isinstance(a, float):
+        assert a == pytest.approx(b, abs=1e-9), where
+    elif isinstance(a, dict):
+        assert a.keys() == b.keys(), where
+        for k in a:
+            _assert_same_state(a[k], b[k], f"{where}[{k!r}]")
+    elif isinstance(a, RobustScale):
+        _assert_same_state(a.median, b.median, f"{where}.median")
+        _assert_same_state(a.scale, b.scale, f"{where}.scale")
+    elif isinstance(a, Signal):
+        assert vars(a).keys() == vars(b).keys(), where
+        for k, v in vars(a).items():
+            if k != "_index":  # the index itself: shared by both copies
+                _assert_same_state(v, vars(b)[k], f"{where}.{k}")
+    else:
+        assert a == b, where
+
+
+@pytest.mark.parametrize("learned_gate", [False, True], ids=["margin gate", "learned gate"])
+def test_incremental_calibration_matches_a_full_refit(caplog, learned_gate):
+    """update() must reach exactly the state fit() would compute on the same index, for every
+    signal, after single adds, a TF-IDF refit and a batch add. A signal whose update() raises
+    silently falls back to fit(), so that fallback must not happen either."""
+    scorer = NoveltyScorer(load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
+                           relevance_negatives=_toy_negatives() if learned_gate else ())
+    assert scorer.signal("relevance").uses_fallback is not learned_gate
+    extra = [Submission(headline=f"Extra {i}", body=f"The garage could host market stall number {i} "
+                        f"with the downtown council support every weekend.", stance="mixed", id=f"e{i}")
+             for i in range(10)]
+    # 13 entries at construction; TF-IDF refits (a full fit of the novelty signals) at 15, 17, 19,
+    # 21 and 24 entries. Eight single adds, then two in one batch (21 -> 23, as the server's replay
+    # does), so the state is checked after incremental steps of both kinds, not only after refits.
+    steps = [[sub] for sub in extra[:8]] + [extra[8:]]
+    with caplog.at_level(logging.WARNING, logger="novelty.scorer"):
+        for batch in steps:
+            version = scorer.index.version
+            scorer.add_many(batch)
+            incremental_step = scorer.index.version == version
+            for s in scorer.signals:
+                full = copy.deepcopy(s)
+                full.fit(scorer.index)
+                _assert_same_state(s, full, f"{s.name} after {len(scorer.index)} entries")
+            assert scorer.index.version == version or not incremental_step, "fit() must not refit the TF-IDF"
+    assert incremental_step, "the batch add must be an incremental step"
+    assert "failed to update incrementally" not in caplog.text
 
 
 def test_tfidf_refits_periodically_not_on_every_insert():

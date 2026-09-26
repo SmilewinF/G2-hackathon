@@ -70,6 +70,12 @@ class Signal(ABC):
     def evaluate(self, analysis: Analysis, index: ReferenceIndex) -> SignalResult:
         """Assess one analysed submission against the index (read-only); the value is in [0, 1]."""
 
+    def clause_relevance(self, analysis: Analysis, index: ReferenceIndex) -> np.ndarray | None:
+        """RELEVANCE signals can judge each clause on its own: one value in [0, 1] per clause of
+        ``analysis``. The scorer puts the lowest across relevance signals into
+        ``Analysis.clause_relevance`` before any signal is evaluated. None = no per-clause view."""
+        return None
+
 
 def normal_cdf(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))

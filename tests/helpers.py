@@ -1,8 +1,11 @@
 """Shared test helpers: thresholds, the test-corpus mode, novelty assertions, and a model-free toy embedder and corpus.
 
-Tests run against the WHOLE corpus by default: the 50 seed comments in data/corpus.json plus
-every admitted submission the web UI saved to data/user_submissions.json. Set
-NOVELTY_TEST_CORPUS=seed to pin the suite to the seed corpus (reproducible CI runs).
+Tests run against the 50 seed comments in data/corpus.json by default, so a run gives the same
+result on every machine. NOVELTY_TEST_CORPUS=full adds every admitted submission the web UI saved
+to data/user_submissions.json: a check of the live corpus, whose result depends on what has been
+typed into the UI (the expectations are defined against the seed corpus, and admitted comments
+shift the calibration and the learned relevance gate). With five ordinary web-UI comments admitted,
+the whole-corpus default failed 11 tests on an unchanged checkout.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ NOVEL_MIN = 0.6  # truly novel, relevant submissions must earn at least this
 NOT_NOVEL_MAX = 0.25  # copies and paraphrases of existing takes must earn at most this
 UNREWARDED = 0.01  # off-topic submissions earn (effectively) nothing
 
-TEST_CORPUS = os.environ.get("NOVELTY_TEST_CORPUS", "full").lower()
+TEST_CORPUS = os.environ.get("NOVELTY_TEST_CORPUS", "seed").lower()
 if TEST_CORPUS not in ("full", "seed"):
     raise RuntimeError(f"NOVELTY_TEST_CORPUS must be 'full' or 'seed', got {TEST_CORPUS!r}")
 USER_SUBMISSIONS = load_user_submissions() if TEST_CORPUS == "full" else []
@@ -66,7 +69,8 @@ def request_json(url: str, body: bytes | None = None) -> tuple[int, dict]:
         with urllib.request.urlopen(req) as resp:
             return resp.status, json.load(resp)
     except urllib.error.HTTPError as e:
-        return e.code, json.load(e)
+        with e:  # an unclosed HTTPError leaks its socket (ResourceWarning)
+            return e.code, json.load(e)
 
 
 class HashEmbedder:

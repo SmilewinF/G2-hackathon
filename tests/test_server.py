@@ -54,7 +54,8 @@ def test_score_does_not_change_corpus_but_commit_does(base_url, base_scorer, pro
 def test_invalid_submission_returns_400(base_url):
     with pytest.raises(urllib.error.HTTPError) as err:
         _post(base_url + "/api/score", {"headline": "", "body": "short", "stance": "maybe"})
-    assert err.value.code == 400
+    with err.value:
+        assert err.value.code == 400
 
 
 def test_committed_submissions_are_saved_and_reloaded(base_url, base_scorer, probes, user_file, corpus_size):
@@ -124,3 +125,84 @@ def test_reset_forgets_user_submissions(base_url, probes, user_file, corpus_size
     _post(base_url + "/api/score", _payload(p, commit=True))
     state = _post(base_url + "/api/reset", {})
     assert state["user_count"] == 0 and state["corpus_size"] == corpus_size and not user_file.exists()
+
+
+# ---------------------------------------------------------------- cross-site requests and hardening
+
+
+def _send(base_url, method, path, body=None, headers=None):
+    """(status, headers, JSON payload) of a raw request with exactly these headers."""
+    import http.client
+    from urllib.parse import urlsplit
+
+    url = urlsplit(base_url)
+    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=30)
+    try:
+        conn.request(method, path, body=body, headers={"Host": url.netloc, **(headers or {})})
+        resp = conn.getresponse()
+        raw = resp.read()
+        return resp.status, dict(resp.getheaders()), json.loads(raw) if raw else None
+    finally:
+        conn.close()
+
+
+def test_cross_site_posts_cannot_commit_or_reset(base_url, probes, user_file):
+    """A text/plain POST needs no CORS preflight, so any web page could commit or wipe
+    submissions while the server ran; both used to succeed."""
+    body = json.dumps(_payload(probes["novel_relevant"][0], commit=True))
+    status, _, _ = _send(base_url, "POST", "/api/score", body, {"Content-Type": "text/plain"})
+    assert status == 415
+    status, _, _ = _send(base_url, "POST", "/api/score", body,
+                         {"Content-Type": "application/json", "Origin": "http://evil.example"})
+    assert status == 403
+    user_file.write_text("[]", encoding="utf-8")
+    status, _, _ = _send(base_url, "POST", "/api/reset", None, {"Origin": "http://evil.example"})
+    assert status == 403 and user_file.exists()
+    status, _, _ = _send(base_url, "POST", "/api/reset")  # no JSON content type
+    assert status == 415 and user_file.exists()
+
+
+def test_foreign_host_header_is_refused(base_url):
+    """DNS rebinding: a page on another domain that resolves to 127.0.0.1 must not read the API."""
+    status, _, payload = _send(base_url, "GET", "/api/context", headers={"Host": "attacker.example"})
+    assert status == 403 and "Host" in payload["error"]
+
+
+def test_same_origin_page_requests_still_work(base_url, probes):
+    origin = base_url.replace("/api", "")
+    status, _, payload = _send(base_url, "POST", "/api/score", json.dumps(_payload(probes["novel_relevant"][0])),
+                               {"Content-Type": "application/json; charset=utf-8", "Origin": origin})
+    assert status == 200 and payload["result"]["score"] > 0
+
+
+def test_responses_carry_security_headers(base_url):
+    _, headers, _ = _send(base_url, "GET", "/api/context")
+    assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    assert headers["X-Content-Type-Options"] == "nosniff" and headers["X-Frame-Options"] == "DENY"
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE", "PATCH", "OPTIONS"])
+def test_other_methods_get_a_json_405(base_url, method):
+    status, headers, payload = _send(base_url, method, "/api/score", "{}")
+    assert status == 405 and headers["Allow"] == "GET, POST" and "error" in payload
+
+
+def test_json_number_too_long_to_parse_is_a_400(base_url):
+    status, payload = _raw(base_url, b'{"headline": ' + b"9" * 5000 + b"}")  # was: 500 (ValueError)
+    assert status == 400 and "error" in payload
+
+
+def test_saved_records_that_cannot_be_replayed_do_not_stop_the_server(base_scorer, user_file, corpus_size):
+    """A record without an id, or with the article's id, used to raise out of App() at startup;
+    "admitted": "no" counted as admitted, and user_count included records the replay skipped."""
+    fine = {"headline": "Solar canopies on the shuttle lot", "stance": "support",
+            "body": "The outer shuttle lot is bare asphalt; solar canopies would shade cars."}
+    user_file.write_text(json.dumps([
+        {**fine, "admitted": True},  # no id
+        {**fine, "id": "article", "admitted": True},
+        {**fine, "id": "t01", "admitted": "no"},
+        {**fine, "id": "t02", "admitted": True},
+    ]), encoding="utf-8")
+    app = App(base_scorer.fork, user_file)
+    assert [s.id for s in app.scorer.corpus][-1] == "t02" and len(app.scorer.corpus) == corpus_size + 1
+    assert app.admitted_count == 1

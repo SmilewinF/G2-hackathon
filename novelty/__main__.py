@@ -93,7 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=_cmd_score)
     p = sub.add_parser("eval", help="held-out evaluation (data/eval/heldout.json)")
-    p.add_argument("--split", choices=["dev", "test", "all"], default="test")
+    # dev by default: iterating on the scorer must never show test-split results by accident
+    p.add_argument("--split", choices=["dev", "test", "all"], default="dev",
+                   help="dev (default; the only split to tune on), test (report only) or all")
     p.add_argument("--failures", type=int, default=10, help="how many worst failures to list")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=_cmd_eval)

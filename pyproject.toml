@@ -25,3 +25,7 @@ novelty = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The held-out TEST split is reported, never tuned on: its checks run only when asked for
+# (pytest -m heldout_test). A later -m on the command line replaces this one.
+addopts = "-m 'not heldout_test'"
+markers = ["heldout_test: aggregate checks on the held-out test split (report only; deselected by default)"]

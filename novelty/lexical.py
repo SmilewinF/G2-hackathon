@@ -123,8 +123,3 @@ class SparseVectors:
                 out[p[0]] += qw * p[1]
         return out
 
-
-def dot(a: SparseVec, b: SparseVec) -> float:
-    if len(a) > len(b):
-        a, b = b, a
-    return sum(w * b.get(t, 0.0) for t, w in a.items())

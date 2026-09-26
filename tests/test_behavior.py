@@ -10,7 +10,6 @@ import pytest
 
 from helpers import NOT_NOVEL_MAX, NOVEL_MIN, UNREWARDED, USER_IDS, already_submitted, assert_novel, corpus_entry
 from novelty.data import load_probes
-from novelty.data import load_probes
 from novelty.models import Stance, Submission
 
 PROBE_COUNTS = {group: len(items) for group, items in load_probes().items()}  # parametrize over every probe
@@ -154,6 +153,14 @@ def test_relevance_gate_keeps_nearly_all_genuine_responses(scorer):
     assert len(full) / len(relevance) >= 0.9
     blocked = [c for c, r in relevance.items() if c.startswith("c") and r == 0.0]
     assert len(blocked) <= 2, blocked
+
+
+@pytest.mark.xfail(strict=True, reason="c36 and c49 are gated leave-one-out (README 'Known limitations')")
+def test_relevance_gate_blocks_no_seed_comment(scorer):
+    """The expectation before the learned gate, kept as a strict expected failure: no genuine seed
+    comment falls to the relevance floor when judged as a new submission."""
+    seed = {c: r for c, r in scorer.corpus_relevance().items() if c.startswith("c")}
+    assert all(r > scorer.config.relevance_floor for r in seed.values()), seed
 
 
 def test_all_scores_are_normalised(scorer, probes):

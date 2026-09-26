@@ -110,8 +110,9 @@ class ScoreBreakdown:
     clause_novelty: float | None  # [0, 1], most novel relevant clause; None if exactly one clause is substantive
     raw_novelty: float  # uncalibrated whole-text distance to nearest neighbours
     stance_rarity: float  # [0, 1], 0 = most common stance in the corpus
-    relevance: float  # [0, 1], margin / typical on-topic margin
-    relevance_margin: float | None  # sim(topic) - sim(generic chatter); <= 0 means off-topic
+    relevance: float  # [0, 1], position within the relevance gate's band (learned gate; TopicMargin: margin / typical margin)
+    relevance_margin: float | None  # distance past the gate's boundary (learned projection - boundary; TopicMargin:
+    # sim(topic) - sim(generic chatter)); <= 0 means off-topic
     relevance_gate: float  # [0, 1], product of relevance signals; 0 = not rewarded
     near_duplicate_of: str | None  # id of the copied entry ("article" = the fixed content)
     nearest: list[Neighbor] = field(default_factory=list)

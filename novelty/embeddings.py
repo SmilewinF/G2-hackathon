@@ -54,6 +54,12 @@ def _normalize(m: np.ndarray) -> np.ndarray:
 
 
 class LocalEmbedder:
+    # fastembed pads every text in a batch to the batch's longest one. A submission is embedded as
+    # its whole text (up to ~450 tokens) plus each clause (~5-15), so one batch made every clause
+    # cost as much as the whole comment: 64 clauses took 6.2 s. Sorted by length in batches of 16,
+    # the same texts take 0.22 s and give bit-identical vectors.
+    BATCH = 16
+
     def __init__(self, model: str = "BAAI/bge-small-en-v1.5") -> None:
         self.name = f"fastembed:{model}"
         self._model_name = model
@@ -82,16 +88,30 @@ class LocalEmbedder:
     def embed(self, texts: Sequence[str]) -> np.ndarray:
         if self._model is None:
             self.warmup()
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
         try:
-            return _normalize(np.array(list(self._model.embed(list(texts)))))
+            vecs = np.array(list(self._model.embed([texts[i] for i in order], batch_size=self.BATCH)))
         except Exception as e:
             raise EmbeddingError(f"{self.name} failed to embed {len(texts)} text(s): {e}") from e
+        out = np.empty_like(vecs)
+        out[order] = vecs
+        return _normalize(out)
+
+
+def _network_errors() -> tuple[type[Exception], ...]:
+    """httpx's timeout and connection errors (google-genai's transport); they do not derive from
+    the built-in TimeoutError/ConnectionError, so they were never retried."""
+    try:
+        import httpx
+    except ImportError:
+        return ()
+    return (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 
 def is_transient_error(e: Exception) -> bool:
     """Worth retrying: rate limits, server errors, timeouts, dropped connections."""
     code = getattr(e, "code", None) or getattr(e, "status_code", None)
-    return code in (408, 429, 500, 502, 503, 504) or isinstance(e, (TimeoutError, ConnectionError))
+    return code in (408, 429, 500, 502, 503, 504) or isinstance(e, (TimeoutError, ConnectionError, *_network_errors()))
 
 
 def gemini_api_key() -> str | None:
@@ -102,10 +122,12 @@ def gemini_api_key() -> str | None:
 class GeminiEmbedder:
     BATCH = 100
     ATTEMPTS = 3
+    TIMEOUT_MS = 30_000  # per request; google-genai's default is no timeout, and the server scores under a lock
 
     def __init__(self, model: str = "gemini-embedding-001", dimensions: int = 768) -> None:
         try:
             from google import genai
+            from google.genai import types
         except ImportError as e:
             raise EmbeddingError(f"google-genai is not installed ({e}); run: pip install -e \".[gemini]\"") from e
 
@@ -113,7 +135,7 @@ class GeminiEmbedder:
         if not api_key:
             raise EmbeddingError("GEMINI_API_KEY is not set (free key: https://aistudio.google.com/)")
         self.name = f"gemini:{model}:{dimensions}"
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=self.TIMEOUT_MS))
         self._model = model
         self._dimensions = dimensions
 
@@ -124,6 +146,8 @@ class GeminiEmbedder:
             task_type="SEMANTIC_SIMILARITY", output_dimensionality=self._dimensions
         )
         vectors: list[list[float]] = []
+        # The API rejects empty content; a body of only slang ("lol lol") prepares to blank text.
+        texts = [t if t.strip() else "." for t in texts]
         for i in range(0, len(texts), self.BATCH):
             resp = self._call(list(texts[i : i + self.BATCH]), config)
             vectors.extend(e.values for e in resp.embeddings)
@@ -164,6 +188,7 @@ class CachedEmbedder:
 
     def _open(self) -> sqlite3.Connection | None:
         for attempt in range(2):
+            db = None
             try:
                 db = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
                 db.execute("PRAGMA journal_mode=WAL")
@@ -172,6 +197,8 @@ class CachedEmbedder:
                 db.execute("SELECT 1 FROM vec LIMIT 1").fetchall()
                 return db
             except sqlite3.DatabaseError as e:
+                if db is not None:
+                    db.close()  # a connection to a corrupt file must be closed before it can be moved aside
                 if attempt:
                     log.warning("embedding cache %s unusable (%s); continuing without a disk cache", self._path, e)
                     return None
@@ -207,6 +234,19 @@ class CachedEmbedder:
     def warmup(self) -> None:
         if hasattr(self.inner, "warmup"):
             self.inner.warmup()
+
+    def close(self) -> None:
+        """Close the cache database; embedding afterwards keeps working, from memory only."""
+        with self._lock:
+            if self._db is not None:
+                self._db.close()
+                self._db = None
+
+    def __enter__(self) -> CachedEmbedder:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def __len__(self) -> int:
         if self._db is None:
@@ -278,6 +318,9 @@ def default_embedder() -> Embedder:
     choice = os.environ.get("NOVELTY_EMBEDDER")
     if choice is None:
         choice = "gemini" if gemini_api_key() else "local"
+        if choice == "gemini" and not os.environ.get("GEMINI_API_KEY"):
+            # GOOGLE_API_KEY is a generic name other tools set too; say that text now goes to Google.
+            log.info("using Gemini embeddings because GOOGLE_API_KEY is set (NOVELTY_EMBEDDER=local keeps text on this machine)")
     if choice not in ("local", "gemini"):
         raise EmbeddingError(f"NOVELTY_EMBEDDER must be 'local' or 'gemini', got {choice!r}")
     inner: Embedder = GeminiEmbedder() if choice == "gemini" else LocalEmbedder()

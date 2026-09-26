@@ -5,18 +5,20 @@
 
 Default signals (see ``novelty/signals``):
     novelty    whole_text       hybrid-similarity distance to nearest neighbours
-               clause_coverage  most novel relevant, substantive clause (kitchen-sink / padding defence)
+               clause_coverage  most novel on-topic, substantive clause (kitchen-sink / padding defence)
     modifier   duplicate        near-copy of a submission or of the article → 0
                quality          keyword lists, repetition, unsupported language → 0
                specificity      generic comments with no concrete point → scaled down
                stance           discount by stance frequency, the most common −10 %
-    relevance  relevance        contrastive topic margin of the substantive body → smooth gate
+    relevance  relevance        learned topic discriminant on the substantive body → smooth gate
+                                (the contrastive topic margin without article-specific negatives)
 
 The similarity-based signals (whole_text, clause_coverage, relevance) self-calibrate against the
 corpus (no hard-coded cosine thresholds), so behaviour carries across embedding backends; stance
 uses the corpus stance frequencies, and the text checks (duplicate, quality, specificity) use
-fixed, model-independent limits. ``submit`` only admits relevant, non-duplicate, substantive
-submissions into the reference corpus, so spam and copy floods cannot shift the calibration.
+fixed, model-independent limits. ``submit`` only admits clearly on-topic, non-duplicate,
+substantive submissions into the reference corpus (see ``admission``), so spam, copy floods and
+off-topic text with one on-topic line cannot shift the calibration or the learned gate.
 
 Logging (logger ``novelty.scorer``): construction writes one INFO "scorer ready" line; every
 ``score``/``submit`` writes two INFO lines, the input and the result with its calculation and
@@ -38,7 +40,7 @@ import numpy as np
 from .embeddings import Embedder
 from .errors import NoveltyError, ScoringError, ValidationError
 from .index import Analysis, ReferenceIndex
-from .logging_setup import preview
+from .logging_setup import preview, printable
 from .preparation import EnglishPreparer, TextPreparer
 from .models import FixedContent, Neighbor, ScoreBreakdown, Submission
 from .signals import (
@@ -51,7 +53,6 @@ from .signals import (
     Specificity,
     StanceRarity,
     TopicDiscriminant,
-    TopicMargin,
     WholeTextNovelty,
 )
 
@@ -67,17 +68,22 @@ class ScorerConfig:
     relevance_floor: float = 0.1  # TopicMargin: calibrated relevance at/below which reward is 0
     relevance_full: float = 0.5  # TopicMargin: calibrated relevance at/above which the gate is fully open
     relevance_shrinkage: float = 0.9  # TopicDiscriminant: covariance shrinkage toward the identity
-    relevance_band: float = 0.25  # TopicDiscriminant: gate half-width, as a share of the on-topic margin
-    duplicate_containment: float = 0.6  # shingle containment at which text counts as a copy
+    relevance_band: float = 0.2  # TopicDiscriminant: gate half-width, as a share of the on-topic margin (dev split)
+    clause_min_relevance: float = 0.5  # ClauseCoverage: a clause is on-topic above this relevance of its own (dev split)
+    clause_min_specific: int = 2  # ClauseCoverage: specific content words a clause needs to supply the novelty
+    duplicate_containment: float = 0.6  # shingle containment at which an entry counts as contained in the text
+    duplicate_min_share: float = 0.5  # ...and the share of the text such entries must make up for it to be a copy
     min_specific_words: int = 4  # distinct specific content words needed for full reward
+    admission_min_gate: float = 0.5  # submit(): relevance gate needed to join the corpus (0.5 = at the boundary)
+    admission_min_on_topic_share: float = 0.2  # submit(): share of substantive words in on-topic clauses (dev split)
 
 
 def default_signals(config: ScorerConfig) -> list[Signal]:
     """The standard signal set, parameterised by ``config``; extend the list to plug in more."""
     return [
         WholeTextNovelty(k=config.k, nearest_weight=config.nearest_weight),
-        ClauseCoverage(),
-        DuplicateCheck(threshold=config.duplicate_containment),
+        ClauseCoverage(min_relevance=config.clause_min_relevance, min_specific=config.clause_min_specific),
+        DuplicateCheck(threshold=config.duplicate_containment, min_share=config.duplicate_min_share),
         ContentQuality(),
         Specificity(min_specific=config.min_specific_words),
         StanceRarity(weight=config.stance_weight),
@@ -166,13 +172,19 @@ class NoveltyScorer:
         log.debug("added %d submission(s); corpus now %d", len(added), len(self.corpus))
 
     def admission(self, result: ScoreBreakdown) -> tuple[bool, str]:
-        """Only content that could ever earn a reward becomes reference data."""
+        """Only clearly on-topic content that could earn a reward becomes reference data. Admitted
+        comments are positives for the learned relevance gate, so borderline ones are kept out:
+        admitting everything with a gate above 0 let off-topic text with one appended garage line
+        in: on dev, the first four of those moved the gate's boundary from 19.3 to 30.6."""
         if result.near_duplicate_of is not None:
             return False, f"not added: duplicate of {result.near_duplicate_of}"
         if result.signals.get("quality", 1.0) == 0.0:
             return False, "not added: no substantive content"
-        if result.relevance_gate == 0.0:
+        if result.relevance_gate < self.config.admission_min_gate:
             return False, "not added: off-topic"
+        share = result.detail.get("clause_coverage", {}).get("on_topic_share")
+        if share is not None and share < self.config.admission_min_on_topic_share:
+            return False, f"not added: mostly off-topic ({share:.0%} of the content is on-topic)"
         return True, "added to corpus"
 
     def submit(self, sub: Submission) -> ScoreBreakdown:
@@ -206,7 +218,7 @@ class NoveltyScorer:
         return result
 
     def _score(self, sub: Submission) -> ScoreBreakdown:
-        analysis = self.index.analyze(sub)
+        analysis = self._with_clause_relevance(self.index.analyze(sub))
         results = {}
         for s in self.signals:
             try:
@@ -219,6 +231,25 @@ class NoveltyScorer:
         if log.isEnabledFor(logging.DEBUG):
             self._log_calculation(result, analysis)
         return result
+
+    def _with_clause_relevance(self, analysis: Analysis) -> Analysis:
+        """Attach each clause's own relevance (lowest across the relevance signals that judge
+        clauses), so novelty signals can tell on-topic clauses from off-topic ones."""
+        views = []
+        for s in self.signals:
+            if s.kind is not Kind.RELEVANCE:
+                continue
+            try:
+                view = s.clause_relevance(analysis, self.index)
+            except NoveltyError:
+                raise
+            except Exception as e:
+                raise ScoringError(f"signal {s.name!r} failed to judge clauses: {e}") from e
+            if view is not None:
+                views.append(np.asarray(view, dtype=float))
+        if not views:
+            return analysis
+        return dataclasses.replace(analysis, clause_relevance=np.minimum.reduce(views))
 
     def _combine(self, results: dict[str, SignalResult], sims: np.ndarray) -> ScoreBreakdown:
         values = {k: [results[s.name].value for s in self.signals if s.kind is k] for k in Kind}
@@ -281,7 +312,7 @@ class NoveltyScorer:
     def _log_input(action: str, sub: Submission) -> None:
         log.info('%s input: id=%s stance=%s words=%d headline="%s"', action, sub.id or "-",
                  sub.stance.value, len(sub.body.split()), preview(sub.headline))
-        log.debug('%s body: "%s"', action, sub.body)
+        log.debug('%s body: "%s"', action, printable(sub.body))  # escaped: a newline must not forge a log line
 
     def _log_result(self, action: str, sub: Submission, r: ScoreBreakdown, start: float,
                     stats: tuple[int, float] | None, admission: str | None = None) -> None:

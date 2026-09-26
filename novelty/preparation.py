@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable, Protocol
 
-from .text import STOPWORDS, clauses, is_substantive, words
+from .text import STOPWORDS, clause_spans, clauses, fold, is_substantive, words
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,8 @@ class PreparedText:
     substantive: tuple[bool, ...]  # sentence-like English clause that makes a statement
     foreign: tuple[bool, ...]  # clause is not in a supported language
     corrections: tuple[tuple[str, str], ...]  # (original, replacement) pairs, for transparency
-    english_body: str = ""  # prepared body without the sentences detected as non-English
+    english_body: str = ""  # prepared body without its non-English sentences and clauses
+    english_headline: str = ""  # prepared headline without its non-English sentences
 
     @property
     def text(self) -> str:
@@ -71,14 +72,26 @@ class PreparedText:
 
     @property
     def analysis_text(self) -> str:
-        """What similarity is computed on: the prepared headline (kept whole) plus the body's English
-        sentences, so untranslated sentences cannot make a text look "unusual", i.e. novel. If no body
-        sentence is English, the whole body is kept."""
-        return f"{self.headline}\n\n{self.english_body or self.body}"
+        """What similarity is computed on: the English part of the prepared headline and body, so
+        untranslated words cannot make a text look "unusual", i.e. novel. If no body clause is
+        English, the whole body is kept (the quality check then gives it nothing)."""
+        return f"{self.english_headline}\n\n{self.english_body or self.body}"
 
 
 class TextPreparer(Protocol):
     def prepare(self, headline: str, body: str) -> PreparedText: ...
+
+
+def _without(text: str, spans: Iterable[tuple[int, int]]) -> str:
+    """``text`` minus the character ranges ``spans`` (overlaps allowed), stripped. With no spans
+    it is ``text`` unchanged, so English-only text is analysed exactly as typed (and prepared)."""
+    out, pos = [], 0
+    for start, end in sorted((max(s, 0), max(e, 0)) for s, e in spans):
+        if start > pos:
+            out.append(text[pos:start])
+        pos = max(pos, end)
+    out.append(text[pos:])
+    return "".join(out).strip()
 
 
 def looks_foreign(text: str) -> bool:
@@ -87,8 +100,10 @@ def looks_foreign(text: str) -> bool:
     letters = [c for c in text if c.isalpha()]
     if letters and sum(not c.isascii() for c in letters) / len(letters) > _FOREIGN_SCRIPT_SHARE:
         return True  # another script or heavily accented text (look-alike letters were already mapped)
-    ws = words(text)
-    foreign = sum(w in FOREIGN_FUNCTION_WORDS for w in ws)
+    # Whole Unicode words: the ASCII ``words`` split "debería" into "deber" + "a" and counted an
+    # English "a"; accents are folded only to match the function-word list ("también" → "tambien").
+    ws = [w.lower() for w in _TOKEN.findall(text)]
+    foreign = sum(fold(w) in FOREIGN_FUNCTION_WORDS for w in ws)
     return foreign >= 2 and foreign > sum(w in STOPWORDS for w in ws)
 
 
@@ -154,29 +169,38 @@ class EnglishPreparer:
 
     # ------------------------------------------------------------------ text level
 
-    def _prepare_prose(self, text: str) -> tuple[str, str, list[tuple[str, str]]]:
-        """Returns (prepared text, prepared text without foreign sentences, corrections)."""
-        parts, english, fixes = [], [], []
+    def _prepare_prose(self, text: str) -> tuple[str, list[tuple[int, int]], list[tuple[str, str]]]:
+        """Returns (prepared text, (start, end) of each foreign sentence in it, corrections)."""
+        parts, foreign_spans, fixes, pos = [], [], [], 0
         for sentence in _SENTENCE.findall(text) or [text]:
             foreign = looks_foreign(sentence)
-            # Correct only sentences with no foreign function words at all: a code-mixed
-            # sentence is still scored, but its Spanish words must not become "deer"/"tender".
+            # Correct only sentences with no foreign function words at all: the Spanish words of a
+            # code-mixed sentence must not become "deer"/"tender".
             if not foreign and not any(w in FOREIGN_FUNCTION_WORDS for w in words(sentence)):
                 sentence, f = self._correct_sentence(sentence)
                 fixes.extend(f)
+            if foreign:
+                foreign_spans.append((pos, pos + len(sentence)))
             parts.append(sentence)
-            if not foreign:
-                english.append(sentence)
-        return "".join(parts).strip(), "".join(english).strip(), fixes
+            pos += len(sentence)
+        joined = "".join(parts)
+        lead = len(joined) - len(joined.lstrip())
+        return joined.strip(), [(s - lead, e - lead) for s, e in foreign_spans], fixes
 
     def prepare(self, headline: str, body: str) -> PreparedText:
-        h, _, hf = self._prepare_prose(headline)
-        b, b_en, bf = self._prepare_prose(body)
-        cl = tuple(clauses(b))
-        foreign = tuple(looks_foreign(c) for c in cl)
+        h, h_foreign, hf = self._prepare_prose(headline)
+        b, b_foreign, bf = self._prepare_prose(body)
+        spans = clause_spans(b)
+        # A clause is foreign if it looks foreign itself or lies in a sentence that does: code-mixed
+        # sentences ("Elm Street se inunda every spring, so the park debería tener rain gardens")
+        # pass the test clause by clause, and their Spanish words then read as novelty (0.90).
+        foreign = tuple(looks_foreign(c) or any(s < fe and e > fs for fs, fe in b_foreign) for c, s, e in spans)
+        cl = tuple(c for c, _, _ in spans)
         substantive = tuple(not f and is_substantive(c) for c, f in zip(cl, foreign))
+        foreign_clauses = [(s, e) for (_, s, e), f in zip(spans, foreign) if f]
         return PreparedText(headline=h, body=b, clauses=cl, substantive=substantive, foreign=foreign,
-                            corrections=tuple(hf + bf), english_body=b_en)
+                            corrections=tuple(hf + bf), english_body=_without(b, [*b_foreign, *foreign_clauses]),
+                            english_headline=_without(h, h_foreign))
 
 
 class PassthroughPreparer:
@@ -186,4 +210,5 @@ class PassthroughPreparer:
         cl = tuple(clauses(body))
         return PreparedText(headline=headline, body=body, clauses=cl,
                             substantive=tuple(is_substantive(c) for c in cl),
-                            foreign=tuple(False for _ in cl), corrections=(), english_body=body)
+                            foreign=tuple(False for _ in cl), corrections=(), english_body=body,
+                            english_headline=headline)

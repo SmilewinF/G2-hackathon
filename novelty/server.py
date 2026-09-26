@@ -17,9 +17,17 @@ POST /api/reset     forget all user submissions (deletes that file, forks the pr
 User submissions are kept out of data/corpus.json on purpose: the tests and README numbers are
 calibrated against that fixed 50-item seed corpus.
 
-Errors always come back as JSON {"error": ..., "request_id": ...}: 400 for bad input, 404 for an
-unknown path, 503 when the embedding backend is unavailable or an OSError (disk or network
-trouble) escapes a route, 500 otherwise (details in the server log under the same request id).
+Only this machine's own page may use the API: every request must carry a loopback Host header
+(127.0.0.1, localhost or [::1] with this port), a request with an Origin must come from one of
+those, and POST bodies must be Content-Type: application/json. Together these stop other web
+sites from posting to the server (a text/plain or form POST needs no CORS preflight) and DNS
+rebinding pages from reading it. Responses carry a restrictive Content-Security-Policy and
+frame-ancestors 'none'.
+
+Errors always come back as JSON {"error": ..., "request_id": ...}: 400 for bad input, 403 for a
+foreign Host or Origin, 404 for an unknown path, 405 for other methods, 415 for a non-JSON POST,
+503 when the embedding backend is unavailable or an OSError (disk or network trouble) escapes a
+route, 500 otherwise (details in the server log under the same request id).
 """
 
 from __future__ import annotations
@@ -39,10 +47,10 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .data import USER_FILE, build_scorer, load_examples, load_probes, write_json_atomic
+from .data import USER_FILE, build_scorer, load_examples, load_probes, replayable_submissions, write_json_atomic
 from .errors import EmbeddingError, NoveltyError, ValidationError
 from .index import ARTICLE_ID
-from .logging_setup import configure_logging, request_id
+from .logging_setup import configure_logging, printable, request_id
 from .models import ScoreBreakdown, Stance, Submission
 from .scorer import NoveltyScorer
 
@@ -54,7 +62,29 @@ _request_ids = itertools.count(1)
 
 
 class BadRequest(ValidationError):
-    pass
+    status = HTTPStatus.BAD_REQUEST
+
+
+class Forbidden(BadRequest):
+    """Cross-site request or foreign Host header: DNS rebinding and CSRF protection."""
+
+    status = HTTPStatus.FORBIDDEN
+
+
+class UnsupportedMediaType(BadRequest):
+    status = HTTPStatus.UNSUPPORTED_MEDIA_TYPE
+
+
+LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
+# The page is self-contained (inline script and style, same-origin fetches only).
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                               "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; "
+                               "frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
 
 
 class App:
@@ -73,21 +103,9 @@ class App:
     def _load(self) -> None:
         self.scorer = self._pristine.fork()
         self.records = self._read_records()
-        replay, seen = [], {s.id for s in self.scorer.corpus}
-        for rec in self.records:
-            if not rec.get("admitted"):
-                continue
-            try:
-                sub = Submission.from_dict(rec)
-            except ValidationError as e:
-                log.warning("skipping saved submission %r: %s", rec.get("id"), e)
-                continue
-            if sub.id in seen:
-                log.warning("skipping saved submission with duplicate id %r", sub.id)
-                continue
-            seen.add(sub.id)
-            replay.append(sub)
+        replay = replayable_submissions(self.records, self.user_file.name, reserved={s.id for s in self.scorer.corpus})
         self.scorer.add_many(replay)  # one recalibration for the whole log, not one per record
+        self._user_ids = {s.id for s in replay}
         if replay:
             log.info("replayed %d saved submission(s) from %s", len(replay), self.user_file.name)
 
@@ -126,7 +144,8 @@ class App:
 
     @property
     def admitted_count(self) -> int:
-        return sum(bool(r.get("admitted")) for r in self.records)
+        """User submissions in the corpus now (saved records the replay skipped do not count)."""
+        return len(self._user_ids)
 
     def headline(self, entry_id: str) -> str:
         if entry_id == ARTICLE_ID:
@@ -143,6 +162,8 @@ class App:
     def submit(self, sub: Submission) -> tuple[Submission, ScoreBreakdown, bool]:
         sub = dataclasses.replace(sub, id=self._next_id())
         result = self.scorer.submit(sub)
+        if result.admitted:
+            self._user_ids.add(sub.id)
         self.records.append({
             "id": sub.id,
             "stance": sub.stance.value,
@@ -165,6 +186,9 @@ class App:
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        # Seconds a client may leave the socket idle; a half-sent request no longer holds a thread forever.
+        timeout = 15
+
         def log_message(self, fmt, *args):  # replaced by our own access log below
             pass
 
@@ -178,8 +202,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             # Never reuse a stale page or response: an old copy of the page calling a newer API
             # broke with "Cannot convert undefined or null to object".
             self.send_header("Cache-Control", "no-store")
+            for name, value in SECURITY_HEADERS.items():
+                self.send_header(name, value)
+            if status == HTTPStatus.METHOD_NOT_ALLOWED:
+                self.send_header("Allow", "GET, POST")
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
 
         def _json(self, status: int, payload) -> None:
             self._send(status, json.dumps(payload).encode(), "application/json")
@@ -188,6 +217,11 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self._json(status, {"error": message, "request_id": request_id.get()})
 
         def _read_json(self) -> dict:
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if content_type != "application/json":
+                # Browsers send text/plain and form posts cross-site without asking; JSON makes
+                # them ask first (a CORS preflight, which this server never grants).
+                raise UnsupportedMediaType("POST requests must be Content-Type: application/json")
             try:
                 length = int(self.headers.get("Content-Length", 0))
             except ValueError:
@@ -196,40 +230,58 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 raise BadRequest(f"request body must be 0-{MAX_BODY_BYTES} bytes")
             try:
                 data = json.loads(self.rfile.read(length) or b"{}")
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError, RecursionError):  # ValueError: bad JSON or a 4,300+ digit number
                 raise BadRequest("request body is not valid JSON") from None
             if not isinstance(data, dict):
                 raise BadRequest("request body must be a JSON object")
             return data
+
+        def _check_origin(self) -> None:
+            """Only this machine's own page may call the API. The Host check stops DNS rebinding
+            (a remote page whose domain resolves to 127.0.0.1 reading responses); the Origin check
+            stops other sites posting to it."""
+            port = self.server.server_address[1]
+            hosts = {f"{name}:{port}" for name in LOOPBACK_NAMES}
+            if port == 80:
+                hosts.update(LOOPBACK_NAMES)
+            host = self.headers.get("Host", "")
+            if host.lower() not in hosts:
+                raise Forbidden(f"unexpected Host header {printable(host)!r}")
+            origin = self.headers.get("Origin")
+            if origin is not None and origin.lower() not in {f"http://{h}" for h in hosts}:
+                raise Forbidden(f"cross-origin request from {printable(origin)!r} refused")
 
         def _guarded(self, route: Callable[[str], None]) -> None:
             """Every failure becomes a JSON error response instead of a dropped connection."""
             token = request_id.set(f"r{next(_request_ids):06d}")
             start, self._status = time.perf_counter(), 0
             path = urlsplit(self.path).path
+            shown = printable(path)  # the raw path may carry newlines or terminal escapes
             try:
+                self._check_origin()
                 route(path)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                log.debug("client disconnected during %s %s", self.command, path)
+                log.debug("client disconnected during %s %s", self.command, shown)
                 return
-            except ValidationError as e:  # includes BadRequest
-                log.info("rejected %s %s: %s", self.command, path, e)
-                self._error(HTTPStatus.BAD_REQUEST, str(e))
+            except ValidationError as e:  # includes BadRequest and its subclasses
+                log.info("rejected %s %s: %s", self.command, shown, e)
+                self._error(getattr(e, "status", HTTPStatus.BAD_REQUEST), str(e))
             except EmbeddingError as e:
                 log.error("embedding backend unavailable: %s", e)
                 self._error(HTTPStatus.SERVICE_UNAVAILABLE, f"scoring unavailable: {e}")
             except NoveltyError as e:
                 log.exception("request failed: %s", e)
                 self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
-            except OSError as e:  # disk or network trouble outside the embedder
-                log.exception("request failed: %s", e)
-                self._error(HTTPStatus.SERVICE_UNAVAILABLE, f"service unavailable: {e}")
+            except OSError:  # disk or network trouble outside the embedder; its text names local paths
+                log.exception("request failed")
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE,
+                            f"service unavailable (request {request_id.get()}), see server log")
             except Exception:
-                log.exception("unexpected error in %s %s", self.command, path)
+                log.exception("unexpected error in %s %s", self.command, shown)
                 self._error(HTTPStatus.INTERNAL_SERVER_ERROR,
                             f"internal error (request {request_id.get()}), see server log")
             finally:
-                log.debug("%s %s -> %s in %.1f ms", self.command, path, self._status,
+                log.debug("%s %s -> %s in %.1f ms", self.command, shown, self._status,
                           (time.perf_counter() - start) * 1000)
                 request_id.reset(token)
 
@@ -244,6 +296,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             self._guarded(self._post)
+
+        def _not_allowed(self, path: str) -> None:
+            self._error(HTTPStatus.METHOD_NOT_ALLOWED, f"{self.command} is not supported; use GET or POST")
+
+        def _refuse(self) -> None:  # the stdlib would answer these with a 501 HTML page
+            self._guarded(self._not_allowed)
+
+        do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _refuse
 
         def _get(self, path: str) -> None:
             if path == "/":
@@ -263,6 +323,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def _post(self, path: str) -> None:
             if path == "/api/reset":
+                self._read_json()  # content-type check: a cross-site form must not be able to wipe the log
                 with app.lock:
                     app.reset()
                     self._json(HTTPStatus.OK, self._state())

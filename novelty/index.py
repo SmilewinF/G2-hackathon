@@ -68,6 +68,8 @@ class Analysis:
     clause_sims: np.ndarray  # (n_clauses, n_entries) hybrid similarity
     clause_margins: np.ndarray  # topic margin per clause
     shingles: frozenset[str]
+    clause_vecs: np.ndarray  # (n_clauses, d) dense, one per clause
+    clause_relevance: np.ndarray | None = None  # per clause, set by the scorer from its relevance signals
 
 
 def _content_text(clause_list: Sequence[str], substantive: Sequence[bool]) -> str | None:
@@ -304,4 +306,5 @@ class ReferenceIndex:
                          else np.zeros((0, len(self.entries)))),
             clause_margins=self.margin(clause_vecs, self._topic_sum) if cl else np.zeros(0),
             shingles=shingles(prep.text),
+            clause_vecs=clause_vecs if cl else np.zeros((0, dense.shape[1]), dtype=np.float32),
         )

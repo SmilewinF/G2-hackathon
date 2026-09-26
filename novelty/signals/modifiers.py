@@ -6,7 +6,7 @@ import numpy as np
 
 from ..index import ARTICLE_ID, Analysis, ReferenceIndex
 from ..models import Stance
-from ..text import STOPWORDS, containment, distinct_share, tokens, words
+from ..text import containment, distinct_share, specific_words, words
 from .base import Kind, Signal, SignalResult
 
 
@@ -16,14 +16,20 @@ class DuplicateCheck(Signal):
     Character-shingle containment is model-independent and catches light edits, padding, sentence
     shuffles and stance-only changes. Normalisation in ``Submission`` defeats invisible-character
     and look-alike-letter evasion before this runs.
+
+    An entry counts as contained when ``threshold`` of the smaller shingle set is in the larger
+    one. The submission is a copy when, in addition, the entries it contains make up at least
+    ``min_share`` of it: a copy with filler or several pasted comments is, a new argument that
+    quotes a short comment is not (it used to score 0 as a "copy" of the quote).
     """
 
     name = "duplicate"
     kind = Kind.MODIFIER
 
-    def __init__(self, threshold: float = 0.6, candidates: int = 25) -> None:
+    def __init__(self, threshold: float = 0.6, candidates: int = 25, min_share: float = 0.5) -> None:
         self.threshold = threshold
         self.candidates = candidates
+        self.min_share = min_share
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         # A copy is necessarily among the most similar entries, so only those (and the article)
@@ -33,16 +39,19 @@ class DuplicateCheck(Signal):
             pool = set(np.argpartition(a.sims, -self.candidates)[-self.candidates:].tolist()) | {0}
         else:
             pool = range(n)
-        best_id, best = None, 0.0
+        best_id, best, copied = None, 0.0, set()
         for i in pool:
             e = index.entries[i]
             c = containment(a.shingles, e.shingles)
             if c > best:
                 best_id, best = e.id, c
-        if best >= self.threshold:
+            if c >= self.threshold:
+                copied |= a.shingles & e.shingles
+        share = len(copied) / len(a.shingles) if a.shingles else 0.0
+        if best >= self.threshold and share >= self.min_share:
             what = "the article itself" if best_id == ARTICLE_ID else best_id
-            return SignalResult(0.0, [f"near-copy of {what} ({best:.0%} shingle overlap)"], {"of": best_id})
-        return SignalResult(1.0, [], {"of": None})
+            return SignalResult(0.0, [f"near-copy of {what} ({best:.0%} shingle overlap)"], {"of": best_id, "share": share})
+        return SignalResult(1.0, [], {"of": None, "share": share})
 
 
 class ContentQuality(Signal):
@@ -72,15 +81,6 @@ class ContentQuality(Signal):
         return SignalResult(0.0 if flags else 1.0, flags + notes, {"flags": flags})
 
 
-# Words that evaluate or refer to the proposal without saying anything specific about it.
-GENERIC_WORDS = frozenset(
-    """love like liked great good bad nice awesome terrible horrible amazing wonderful excellent
-    fantastic awful best worst fine happy glad sad agree disagree support oppose hate idea plan
-    project proposal decision thing stuff way think thought feel opinion really totally definitely
-    yes yeah wow thanks thank please sure just well much""".split()
-)
-
-
 class Specificity(Signal):
     """Discount text that makes no concrete point ("I love this park idea!").
 
@@ -99,8 +99,7 @@ class Specificity(Signal):
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         english = [c for c, f in zip(a.clauses, a.foreign) if not f]
-        text = " ".join([a.prepared.headline, *english])
-        specific = {t for t in tokens(text) if t not in GENERIC_WORDS and t not in STOPWORDS}
+        specific = specific_words(" ".join([a.prepared.english_headline, *english]))
         value = min(1.0, len(specific) / self.min_specific) ** 2
         reasons = [] if value == 1.0 else [f"only {len(specific)} specific content word(s): generic comment discounted"]
         return SignalResult(value, reasons, {"specific_words": sorted(specific)})

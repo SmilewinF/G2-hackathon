@@ -15,6 +15,7 @@ FLOOD_EN = ("Elm Street floods every spring because the garage and pavement shed
             "downtown basements.")
 FLOOD_ES = ("La calle Elm se inunda cada primavera. Construir el parque con jardines de lluvia y un tanque "
             "subterráneo protegería los sótanos del centro.")
+CODE_MIXED = "Elm Street se inunda every spring, so the park debería tener rain gardens y un tanque underground."
 PARKING_EN = "Removing the garage will hurt every shop on Main Street because shoppers will go to the malls instead."
 PARKING_ES = ("Perder cientos de plazas de estacionamiento en el centro será un desastre para las tiendas "
               "locales. Los compradores irán a los centros comerciales.")
@@ -54,9 +55,31 @@ def test_non_english_only_text_gets_a_clear_reason(scorer):
     assert any("not in a supported language" in x for x in r.reasons)
 
 
-def test_foreign_words_are_never_spell_corrected_into_english(scorer):
+def test_code_mixed_sentence_earns_nothing(scorer):
+    """Each clause passes the English test on its own, but the sentence is Spanish-English: its
+    Spanish words supplied the novelty (0.90). A clause inherits its sentence's language."""
+    r = _score(scorer, "Rain gardens", CODE_MIXED)
+    assert r.score == 0.0
+
+
+def test_foreign_clause_of_an_english_sentence_is_not_analysed(scorer):
     prep = scorer.index.preparer.prepare(
-        "Flood", "Elm Street se inunda every spring, so the park debería tener rain gardens y un tanque underground.")
+        "Rain gardens", "The park should have rain gardens, porque Elm Street se inunda cada primavera and basements flood.")
+    assert prep.foreign == (False, True)
+    assert "rain gardens" in prep.analysis_text and "inunda" not in prep.analysis_text
+
+
+def test_foreign_headline_cannot_make_a_paraphrase_look_new(scorer, probes):
+    """The headline was kept whole in the analysed text, so a Spanish one read as novelty (0.04 -> 0.23)."""
+    para = next(p for p in probes["duplicates"] if p.id == "d_paraphrase_family")
+    own = scorer.score(para).score
+    spanish = scorer.score(Submission(headline="El parque es una buena idea para las familias de la ciudad",
+                                      body=para.body, stance=para.stance)).score
+    assert spanish <= own + 0.05, (own, spanish)
+
+
+def test_foreign_words_are_never_spell_corrected_into_english(scorer):
+    prep = scorer.index.preparer.prepare("Flood", CODE_MIXED)
     assert "debería tener" in prep.body and not prep.corrections
 
 
@@ -131,29 +154,44 @@ def test_long_rehash_of_existing_takes_is_not_rewarded(scorer):
     assert _score(scorer, "My view on the park", body, "mixed").score <= 0.35
 
 
-def test_half_off_topic_half_novel_is_not_rewarded_as_novel(scorer):
-    """Trade-off of the learned relevance gate: relevance is judged on the whole substantive body,
-    so a comment that is half unrelated chatter falls below the learned boundary. With the old
-    contrastive-margin gate this scored 0.74; now it is treated as off-topic. Judging relevance
-    clause by clause would reward the on-topic half, but must not reopen the "mentions parking in
-    passing" leak; see README "Known limitations"."""
-    r = _score(scorer, "Two things",
-               "I finally tried the new ramen place near the station and the broth was incredible. The park should "
-               "be built with rain gardens and an underground tank so Elm Street stops flooding every spring.")
-    assert r.score <= NOT_NOVEL_MAX
+HALF_OFF_TOPIC = ("I finally tried the new ramen place near the station and the broth was incredible. The park should "
+                  "be built with rain gardens and an underground tank so Elm Street stops flooding every spring.")
+
+
+@pytest.mark.xfail(strict=True, reason="known limitation of the learned relevance gate (README 'Known limitations')")
+def test_half_off_topic_half_novel_rewards_the_novel_half(scorer):
+    """The target behaviour, kept as a strict expected failure so fixing it is noticed.
+
+    Relevance is judged on the whole substantive body, so a comment that is half unrelated chatter
+    falls below the learned boundary and scores 0 (0.74 with the old contrastive-margin gate).
+    Judging relevance clause by clause would reward the on-topic half, but must not reopen the
+    "mentions the garage in passing" leak."""
+    _novel(scorer, "Two things", HALF_OFF_TOPIC)
+
+
+def test_half_off_topic_half_novel_is_at_least_not_rewarded_as_novel(scorer):
+    """What the gate does today: the unrelated half cannot earn a reward on its own."""
+    assert _score(scorer, "Two things", HALF_OFF_TOPIC).score <= NOT_NOVEL_MAX
+
+
+MOSTLY_OFF_TOPIC = " ".join([
+    "This weekend I finally tried the new ramen place near the station and the broth was incredible.",
+    "My cousin is visiting from Denver and we spent the afternoon hiking along the river trail.",
+    "The weather has been perfect for walking and the leaves are starting to change color.",
+    "Anyway, the new park should be designed with rain gardens and an underground tank so Elm Street stops flooding.",
+    "We also watched a great documentary about octopuses that I would recommend to anyone.",
+])
 
 
 def test_mostly_off_topic_with_one_relevant_line_is_heavily_discounted(scorer):
-    body = " ".join([
-        "This weekend I finally tried the new ramen place near the station and the broth was incredible.",
-        "My cousin is visiting from Denver and we spent the afternoon hiking along the river trail.",
-        "The weather has been perfect for walking and the leaves are starting to change color.",
-        "Anyway, the new park should be designed with rain gardens and an underground tank so Elm Street stops flooding.",
-        "We also watched a great documentary about octopuses that I would recommend to anyone.",
-    ])
-    r = _score(scorer, "A few thoughts", body)
-    # With the learned relevance gate a mostly off-topic comment earns nothing (0.13 before).
-    assert r.score <= 0.3, "the comment is mostly off-topic"
+    assert _score(scorer, "A few thoughts", MOSTLY_OFF_TOPIC).score <= 0.3, "the comment is mostly off-topic"
+
+
+@pytest.mark.xfail(strict=True, reason="known limitation of the learned relevance gate (README 'Known limitations')")
+def test_mostly_off_topic_with_one_relevant_line_still_earns_something(scorer):
+    """The original expectation (0.13 with the contrastive-margin gate): the one relevant new idea
+    earns a little. The learned gate judges the whole body and gives it 0."""
+    assert _score(scorer, "A few thoughts", MOSTLY_OFF_TOPIC).score > 0.0
 
 
 def test_body_length_limit_is_enforced():

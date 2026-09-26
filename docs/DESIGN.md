@@ -54,7 +54,8 @@ Because the two numbers are multiplied, a comment has to do well on **both** to 
 
 **How "on topic" is measured (the topic check).**
 - **Learning from examples:** the system learns what this article's topic looks like from two sets of examples. One set is the existing comments on the article. The other is 72 comments from the same town about *other* things: bus routes, the library, water bills, other parks, potholes, school news. These are deliberately tricky look-alikes, sometimes called "hard negatives".
-- **The boundary:** it draws the line that best separates the two sets. A comment clearly on the "other things" side gets a topic score of 0, one clearly on the article's side gets 1, and one close to the line gets something in between.
+- **The boundary:** it draws the line where it misses as many of the article's comments as it lets through look-alikes. A comment clearly on the "other things" side gets a topic score of 0, one clearly on the article's side gets 1, and one close to the line gets something in between. (The first version put the line wherever it separated the two sets best. That line could jump: one ordinary new comment moved it far enough to take most of a good idea's reward away. The new line moves only a little with each comment.)
+- **Clause by clause, too:** the same check is applied to each part of a comment on its own. Only parts that are on topic by themselves can count as the comment's new idea, so an off-topic comment can't earn a reward by tacking on one sentence about the garage.
 
 **Extra checks that can only lower the reward:**
 - A comment that is a near-copy of an existing one, or of the article itself, gets 0.
@@ -67,7 +68,7 @@ Because the two numbers are multiplied, a comment has to do well on **both** to 
 - common typos are fixed and texting shorthand is expanded, so bad spelling neither hides a repeat nor penalises a good idea;
 - sentences that aren't in English are left out of the scoring, so they neither add to nor lower the reward.
 
-**Learning as it goes.** When a comment is accepted, it joins the pool of existing comments, and the next person to make the same point gets a lower reward. That is what "new relative to other submissions" means. A comment is accepted only if it passes the topic check (even partly), isn't a near-copy of an existing comment or of the article, and contains real sentences. There is no minimum novelty, so a low-scoring rewording still joins. These rules stop spam and copies from shifting the system's picture of a typical comment, which is the yardstick for "new".
+**Learning as it goes.** When a comment is accepted, it joins the pool of existing comments, and the next person to make the same point gets a lower reward. That is what "new relative to other submissions" means. A comment is accepted only if it is clearly on topic (on the article's side of the topic line, with at least a fifth of it on topic part by part), isn't a near-copy of an existing comment or of the article, and contains real sentences. There is no minimum novelty, so a low-scoring rewording still joins. These rules stop spam and copies from shifting the system's picture of a typical comment, which is the yardstick for "new".
 
 ### What you can run
 
@@ -109,7 +110,7 @@ The project brief sets its requirements; I turned each into a bar that a single 
 Only the off-topic requirement has a target share: at least **85%** of unseen off-topic comments must score 0.01 or less, and a test enforces it. For new ideas and rewordings I set no target; I report the measured share, and the tests only stop it from falling about 10 points below today's value.
 
 **Three kinds of evidence:**
-1. **Automated tests (189 in total)** covering scoring, cheating attempts, unusual input, the maths and the server. The scoring tests check these bars on hand-picked cases, including 21 deliberate attempts to cheat the system.
+1. **Automated tests (236 in total)** covering scoring, cheating attempts, unusual input, the maths and the server. The scoring tests check these bars on hand-picked cases, including 34 deliberate attempts to cheat the system. Three more tests record known weaknesses: they are expected to fail, and they'll flag it when a weakness is fixed.
 2. **A separate evaluation set** of 200 comments, kept apart from the building work.
    - 140 were written by AI writers who saw only the article and the example comments, never the scoring code.
    - The other 60 are "red-team" comments (written to trick the system) from an independent review panel that had already tested it.
@@ -132,11 +133,12 @@ Only the off-topic requirement has a target share: at least **85%** of unseen of
 
 | Kind of comment | Reward |
 |---|---|
-| Three genuinely new ideas (flood-proof park design, keeping the garage frame, a heritage walk) | 0.84–0.85 |
+| Three genuinely new ideas (flood-proof park design, keeping the garage frame, a heritage walk) | 0.72–0.85 |
 | Copies and rewordings of existing comments | 0.00–0.04 |
 | Off-topic comments (sourdough baking, quantum computing, the high-school football team) | 0.00 |
 | Six local comments about other town issues (bus route, library, water bills, snow plowing, polling place, school hours). Similar subjects appear in the training examples, so this shows the fix working where it was taught. | 0.00 (previously 0.45–0.97) |
 | Attempts to cheat: stuffing keywords, listing every opinion, repeating a word 40 times, padding with spam, disguised copies | 0.00–0.23 (previously up to 0.81) |
+| Tricks found in a later review: copies hidden with invisible or look-alike characters, praise in the past tense, an off-topic comment with one garage sentence added, a sentence mixing Spanish and English | 0.00–0.09 (previously up to 0.90) |
 
 ### On the separate test set (130 comments never used for tuning)
 
@@ -148,15 +150,17 @@ Only the off-topic requirement has a target share: at least **85%** of unseen of
 | Of these: distant subjects | 6 | 100% | 100% |
 | Tricky cases, such as an off-topic comment that mentions parking in passing | 7 | 71% | 86% |
 | How well it ranks on-topic above off-topic (AUC) | – | 0.79 | **0.91** |
-| New ideas scoring 0.6 or more | 29 | 66% | 55% |
-| Rewordings kept at 0.25 or less | 38 | 53% | 50% |
+| New ideas scoring 0.6 or more | 29 | 66% | 48% |
+| Rewordings kept at 0.25 or less | 38 | 53% | 53% |
 | Vague comments kept at 0.25 or less | 5 | 80% | 80% |
-| How well it ranks new ideas above the rest (AUC) | – | 0.79 | 0.78 |
+| How well it ranks new ideas above the rest (AUC) | – | 0.79 | 0.76 |
 | Rewarded until someone makes the point, then not | 4 pairs | 0% | 0% |
+
+The review fixes changed three of these comments: one rewording is now caught, and two new ideas (training local apprentices on the demolition, and not demolishing during holiday shopping) are now missed, because the part of each comment that is new isn't clearly about the park when read on its own.
 
 **In plain words:**
 - **Off-topic comments:** the system now refuses to reward about 9 in 10 of them (39 of 43), including all 6 on subjects missing from its training examples. That sample is small, and similar subjects appeared in the part I tuned on.
-- **New ideas:** it gives 0.6 or more to about half of them (55%), down from 66%, because the stricter topic check now holds back some genuine ideas (see Limitation 2).
+- **New ideas:** it gives 0.6 or more to about half of them (48%), down from 66%, because the stricter topic check now holds back some genuine ideas (see Limitation 2).
 - **Rewordings:** it keeps about half of those that use different words at 0.25 or less.
 - **Rewards dropping once an idea is made:** on unseen pairs this never worked (0 of 4).
 
@@ -167,16 +171,16 @@ Only the off-topic requirement has a target share: at least **85%** of unseen of
 | Scores on a 0-to-1 scale | **Met** |
 | Off-topic comments get nothing | **Largely met:** 39 of 43 unseen off-topic comments (91%) scored 0.01 or less, above the 85% target, including all 6 on subjects missing from the training examples (a small sample). The 4 that got through are close neighbours of the topic (another park's dog run and tennis courts, library funding, recycling) and scored 0.16–0.94. |
 | Genuine comments aren't blocked | **Mostly met:** 94% of the existing comments keep a full topic score, and on-topic comments rank well above off-topic ones (AUC 0.91). But 2 of the 50 existing comments would be blocked if posted today, and the stricter check holds back some genuine new ideas. |
-| Repeats don't get rewarded | **Met on hand-picked cases:** copies and rewordings that reuse words score 0.00–0.04. **Partly met on unseen data:** 19 of 38 rewordings in different words (50%) and 4 of 5 vague comments stayed at 0.25 or less. |
-| New ideas get rewarded | **Partly met:** 16 of 29 unseen new ideas (55%) reached 0.6, down from 66%. The three hand-picked ideas score about 0.85. Of the 13 unseen ideas that fell short, 6 weren't judged new enough, and 7 were clearly new but held back, at least partly, by the topic check. |
+| Repeats don't get rewarded | **Met on hand-picked cases:** copies and rewordings that reuse words score 0.00–0.04. **Partly met on unseen data:** 20 of 38 rewordings in different words (53%) and 4 of 5 vague comments stayed at 0.25 or less. |
+| New ideas get rewarded | **Partly met:** 14 of 29 unseen new ideas (48%) reached 0.6, down from 66%. The three hand-picked ideas score 0.72–0.85. Of the 15 unseen ideas that fell short, 8 weren't judged new enough (2 of them because only parts of a comment that are on topic by themselves can count as its new idea), and 7 were clearly new but held back, at least partly, by the topic check. |
 | An idea's reward drops once someone has made it | **Not met on unseen data:** 0 of 4 test pairs passed (the idea must score 0.6 or more before it's posted, and its rewording 0.25 or less after). It works in a hand-picked case where the rewording shares key words: the first comment making the point scores 0.86, and a later rewording of it 0.06. |
 
 ### Speed and running cost
 
 - **Speed**, for a comment section of about 50 comments on an ordinary laptop:
-  - scoring a new comment takes about 15 thousandths of a second, and under 1 thousandth if the exact same text has been scored before;
-  - adding an accepted comment and updating everything takes about 4 thousandths.
-- **Cost:** by default it runs fully offline, using a small, free embedding model on the same computer, so there's no per-comment fee. The system can also use Google's paid Gemini service instead. From token counts and Google's published price, I estimate that 1,000 new comments would cost about one to two US cents. That is an estimate, not a real bill, because the Google option hasn't been run with a real account.
+  - scoring a new comment takes about 15–20 thousandths of a second (a very long comment about a fifth of a second), and under 1 thousandth if the exact same text has been scored before;
+  - adding an accepted comment and updating everything takes about 6 thousandths, and about 14 with 1,000 comments.
+- **Cost:** by default it runs fully offline, using a small, free embedding model on the same computer, so there's no per-comment fee. The system can also use Google's Gemini service instead (free tier, or paid beyond it). Each new comment is sent as the whole text plus each of its parts, about 2.7 times its length. From that and Google's published price, I estimate that 1,000 new comments would cost about two to three US cents. That is an estimate, not a real bill, because the Google option hasn't been run with a real account.
 
 ---
 
@@ -184,15 +188,16 @@ Only the off-topic requirement has a target share: at least **85%** of unseen of
 
 1. **Rewordings in completely different words** are the biggest weakness. If someone restates an existing point with none of the same words, the system often thinks it's new. That is also why rewards don't reliably drop once an idea has been made (0 of 4 unseen pairs). The fix I'd make next is a second check that asks directly whether two comments make the same point, using a more careful AI comparison.
 2. **The strict topic check has a cost:**
-   - it holds back genuine new ideas that sit near another subject. On the test set, 7 of the 13 new ideas that fell short were held back at least partly by the topic check, for example night-shift nurses who rely on the garage, or putting the comment form in Spanish. The stricter check caused 3 of these, which is why the share of new ideas reaching 0.6 fell from 66% to 55%. Falcons nesting on the garage is another case, from the tuning set;
+   - it holds back genuine new ideas that sit near another subject. On the test set, 7 of the 13 new ideas that fell short were held back at least partly by the topic check, for example night-shift nurses who rely on the garage, or putting the comment form in Spanish. The stricter check caused 3 of these, and judging each part of a comment on its own cost 2 more ideas whose new part isn't clearly about the park by itself, which is why the share of new ideas reaching 0.6 fell from 66% to 48%. Falcons nesting on the garage is another case, from the tuning set;
    - a comment that is half off-topic chatter and half a good idea now earns nothing;
    - two short on-topic comments in the example set (a question about the shuttle, and a complaint about the vote) would be blocked if posted today.
 3. **The closest neighbours of the topic still slip through sometimes:** comments about *other* parks (a dog-run fence, cracked tennis courts), library funding and recycling.
 4. **It's built for one article.** The topic check learns from off-topic examples written for this article (I used 72), so a new article needs its own set. With fewer than 10, it falls back to a simpler check that is known to be weaker.
-5. **English only.** Non-English sentences are left out of the scoring, and a sentence that mixes English with another language earns nothing, even when it contains a good idea.
-6. **It judges newness, not quality or truth.** A new but rude or false comment is rewarded like any other new comment. The score is also shown instantly, so someone can keep rewording a comment until it scores well. A real deployment would put this behind moderation and rate limiting.
-7. **The Google option is untested.** It has never been run with a real account, and the hand-set settings (the 60/40 blend, the vagueness rule, the topic check's strictness) were tuned with the free local model only.
-8. **Built for a small comment section.** The speeds above are for about 50 comments. Each new comment is compared with every existing one, so tens of thousands of comments would need a faster search index.
+5. **English only.** Non-English sentences are left out of the scoring, and so are non-English parts of an English sentence. A sentence that is mostly another language earns nothing, even when parts of it are English and contain a good idea.
+6. **Quoting another comment** to argue with it is no longer treated as copying, but the quote makes the whole comment look similar to the one it quotes, so the new part is under-rewarded.
+7. **It judges newness, not quality or truth.** A new but rude or false comment is rewarded like any other new comment. The score is also shown instantly, so someone can keep rewording a comment until it scores well. A real deployment would put this behind moderation and rate limiting.
+8. **The Google option is untested.** It has never been run with a real account, and the hand-set settings (the 60/40 blend, the vagueness rule, the topic check's strictness) were tuned with the free local model only.
+9. **Built for a small comment section.** The speeds above are for about 50 comments (and 1,000 for the update time). Each new comment is compared with every existing one, so tens of thousands of comments would need a faster search index.
 
 ---
 

@@ -339,7 +339,9 @@ $('headline').addEventListener('input', updateCounts);
 $('body').addEventListener('input', updateCounts);
 $('reset').addEventListener('click', async () => {
   if (!confirm('Remove every comment you added to the corpus?')) return;
-  const res = await fetch('/api/reset', { method: 'POST' });
+  const res = await fetch('/api/reset', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
   const data = await res.json();
   if (!res.ok) { alert(`Reset failed: ${data.error}`); return; }
   showCounts(data);
