@@ -1,0 +1,67 @@
+{
+  "_comment": "Example submissions shown in the web UI: two per stance. 'expect' is what the scorer should do with each (novel = rewarded, common = already said, off_topic = not rewarded). tests/test_examples.py keeps them honest.",
+  "support": [
+    {
+      "id": "ex_support_new",
+      "expect": "novel",
+      "label": "New idea",
+      "headline": "Put a tool library and repair cafe in the park pavilion",
+      "body": "The pavilion could host a lending library for tools and a monthly repair cafe where volunteers fix bikes and small appliances. It would give people a reason to come downtown on quiet weekday evenings."
+    },
+    {
+      "id": "ex_support_common",
+      "expect": "common",
+      "label": "Common view",
+      "headline": "Downtown kids finally get somewhere to play",
+      "body": "Families living in downtown apartments have no yard and no playground nearby. A two-acre park would give children a safe green place to play after school."
+    }
+  ],
+  "oppose": [
+    {
+      "id": "ex_oppose_new",
+      "expect": "novel",
+      "label": "New idea",
+      "headline": "Delivery trucks will end up double-parked on Main Street",
+      "body": "Shops receive their deliveries through the garage loading bay. Without it, trucks will double-park on Main Street every morning and block the buses."
+    },
+    {
+      "id": "ex_oppose_common",
+      "expect": "common",
+      "label": "Common view",
+      "headline": "No parking means no customers",
+      "body": "If shoppers cannot find parking near the stores they will drive to the suburban malls instead. Removing the garage will hurt every small business on Main Street."
+    }
+  ],
+  "mixed": [
+    {
+      "id": "ex_mixed_new",
+      "expect": "novel",
+      "label": "New idea",
+      "headline": "Name the park after the families who ran the old market",
+      "body": "The park is a good idea, but I hope the council names it after the families who ran the Saturday market on this block before the garage was built, and puts up a plaque telling that story."
+    },
+    {
+      "id": "ex_mixed_common",
+      "expect": "common",
+      "label": "Common view",
+      "headline": "The shuttle has to run often to work",
+      "body": "A free shuttle sounds good, but if it only comes every half hour nobody will use it. The council needs to commit to frequent service before relying on it."
+    }
+  ],
+  "undecided": [
+    {
+      "id": "ex_undecided_new",
+      "expect": "novel",
+      "label": "New idea",
+      "headline": "Count how customers actually arrive before deciding",
+      "body": "Nobody has measured how many Main Street customers arrive by car versus on foot or by bus. A one-week survey at the shop doors would settle the parking argument with data instead of guesses."
+    },
+    {
+      "id": "ex_undecided_offtopic",
+      "expect": "off_topic",
+      "label": "Off-topic",
+      "headline": "Our book club is reading a great mystery",
+      "body": "This month our book club picked a mystery set on a fishing boat, and nobody guessed the ending. Highly recommend it for a long weekend."
+    }
+  ]
+}

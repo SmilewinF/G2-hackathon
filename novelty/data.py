@@ -14,7 +14,7 @@ from typing import Any
 
 from .embeddings import Embedder, default_embedder
 from .errors import DataError, ValidationError
-from .models import FixedContent, Submission
+from .models import FixedContent, Stance, Submission
 from .scorer import NoveltyScorer, ScorerConfig
 
 log = logging.getLogger(__name__)
@@ -88,6 +88,29 @@ def load_probes() -> dict[str, list[dict]]:
             raise DataError(f"probes.json group {group!r} must be a list")
         _submissions(items, f"probes.json[{group}]")  # validate every probe
     return probes
+
+
+EXAMPLE_EXPECTATIONS = ("novel", "common", "off_topic")
+
+
+def load_examples() -> dict[str, list[dict]]:
+    """The web UI's example submissions (data/examples.json): exactly two per stance, each with
+    the outcome it demonstrates ("expect") and a short display label."""
+    raw = {k: v for k, v in _load("examples.json", dict).items() if not k.startswith("_")}
+    stances = [s.value for s in Stance]
+    if sorted(raw) != sorted(stances):
+        raise DataError(f"examples.json must have exactly the stances {stances}, got {sorted(raw)}")
+    examples = {}
+    for stance in stances:  # stance order, not file order
+        items = raw[stance]
+        if not isinstance(items, list) or len(items) != 2:
+            raise DataError(f"examples.json[{stance}] must be a list of exactly 2 examples")
+        for i, item in enumerate(items):
+            if not isinstance(item, dict) or item.get("expect") not in EXAMPLE_EXPECTATIONS or not item.get("label"):
+                raise DataError(f"examples.json[{stance}] item {i} needs a label and expect in {EXAMPLE_EXPECTATIONS}")
+        _submissions([{**item, "stance": stance} for item in items], f"examples.json[{stance}]")
+        examples[stance] = [{**item, "stance": stance} for item in items]
+    return examples
 
 
 def load_user_submissions(path: Path = USER_FILE, admitted_only: bool = True) -> list[Submission]:

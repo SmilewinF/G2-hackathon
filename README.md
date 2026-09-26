@@ -271,11 +271,11 @@ python -m novelty demo                     # now uses gemini-embedding-001
 python scripts/generate_corpus.py          # regenerate a synthetic corpus → data/corpus.generated.json
 ```
 
-The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only) shows:
+The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only, responsive, light and dark themes) shows:
 - the article
 - a form for the three properties
-- one-click example probes
-- the full score breakdown, with nearest neighbours
+- two examples per stance, from [data/examples.json](data/examples.json). Each is labelled with what it demonstrates (new idea, common view or off-topic), and `tests/test_examples.py` keeps them honest.
+- the result: the score, a plain-language verdict, novelty and relevance bars, and the most similar existing comment. A collapsed **Details** section holds the formula, every signal, the five nearest comments and the scorer's notes.
 
 It has three buttons:
 - **Score** leaves the corpus unchanged.

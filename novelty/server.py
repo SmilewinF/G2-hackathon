@@ -3,7 +3,7 @@
     python -m novelty serve [--port 8000]
 
 GET  /              the page (novelty/static/index.html)
-GET  /api/context   fixed content, corpus size, example probes
+GET  /api/context   fixed content, corpus size, UI examples (two per stance), labelled probes
 POST /api/score     {"headline", "body", "stance", "commit": bool} -> ScoreBreakdown JSON
                     commit=true runs submit(): the attempt is logged to data/user_submissions.json
                     and, if the admission policy accepts it, added to the corpus. Admitted entries
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .data import USER_FILE, build_scorer, load_probes
+from .data import USER_FILE, build_scorer, load_examples, load_probes
 from .errors import EmbeddingError, NoveltyError, ValidationError
 from .logging_setup import configure_logging, request_id
 from .models import Stance, Submission
@@ -59,7 +59,8 @@ class App:
         self.lock = threading.Lock()
         self._pristine = scorer_factory()  # seed corpus only; reset() forks it instead of rebuilding
         self.user_file = user_file
-        self.probes = load_probes()  # static examples for the page: read once, not per request
+        self.probes = load_probes()  # static data for the page: read once, not per request
+        self.examples = load_examples()
         self._load()
 
     # ------------------------------------------------------------------ persistence
@@ -171,6 +172,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            # Never reuse a stale page or response: an old copy of the page calling a newer API
+            # broke with "Cannot convert undefined or null to object".
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
@@ -248,6 +252,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                         "fixed": dataclasses.asdict(app.scorer.fixed),
                         "stances": [s.value for s in Stance],
                         "probes": app.probes,
+                        "examples": app.examples,
                         "embedder": app.scorer.embedder.name,
                     })
             else:
