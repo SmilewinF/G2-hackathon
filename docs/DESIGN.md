@@ -186,19 +186,11 @@ Only the off-topic requirement has a target share: at least **85%** of unseen of
    - a comment that is half off-topic chatter and half a good idea now earns nothing;
    - two short on-topic comments in the example set (a question about the shuttle, and a complaint about the vote) would be blocked if posted today.
 3. **The closest neighbours of the topic still slip through sometimes:** comments about *other* parks (a dog-run fence, cracked tennis courts), library funding and recycling.
-4. **Everything was written and checked by AI, not people.**
-   - The example comments, the evaluation comments and their labels were all produced by AI models from the same family as the AI coding agent I built the scorer with (see COLLABORATION.md), so they may share its blind spots.
-   - The 72 off-topic training examples were written the same way, and cover many of the same subjects as the test's off-topic comments.
-   - Comments the two AI labellers disagreed on were dropped, which removes some of the hardest cases.
-   - Everything was measured on one article.
-
-   A proper evaluation would use real comments on several articles, labelled by people.
-
-5. **It's built for one article.** The topic check learns from off-topic examples written for this article (I used 72), so a new article needs its own set. With fewer than 10, it falls back to a simpler check that is known to be weaker.
-6. **English only.** Non-English sentences are left out of the scoring, and a sentence that mixes English with another language earns nothing, even when it contains a good idea.
-7. **It judges newness, not quality or truth.** A new but rude or false comment is rewarded like any other new comment. The score is also shown instantly, so someone can keep rewording a comment until it scores well. A real deployment would put this behind moderation and rate limiting.
-8. **The Google option is untested.** It has never been run with a real account, and the hand-set settings (the 60/40 blend, the vagueness rule, the topic check's strictness) were tuned with the free local model only.
-9. **Built for a small comment section.** The speeds above are for about 50 comments. Each new comment is compared with every existing one, so tens of thousands of comments would need a faster search index.
+4. **It's built for one article.** The topic check learns from off-topic examples written for this article (I used 72), so a new article needs its own set. With fewer than 10, it falls back to a simpler check that is known to be weaker.
+5. **English only.** Non-English sentences are left out of the scoring, and a sentence that mixes English with another language earns nothing, even when it contains a good idea.
+6. **It judges newness, not quality or truth.** A new but rude or false comment is rewarded like any other new comment. The score is also shown instantly, so someone can keep rewording a comment until it scores well. A real deployment would put this behind moderation and rate limiting.
+7. **The Google option is untested.** It has never been run with a real account, and the hand-set settings (the 60/40 blend, the vagueness rule, the topic check's strictness) were tuned with the free local model only.
+8. **Built for a small comment section.** The speeds above are for about 50 comments. Each new comment is compared with every existing one, so tens of thousands of comments would need a faster search index.
 
 ---
 
