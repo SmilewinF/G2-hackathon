@@ -122,7 +122,9 @@ class EnglishPreparer:
             return word
         if lower in self._cache:
             return self._cache[lower]
-        candidates = self._sp.candidates(lower) or ()
+        # sorted(): candidates() returns a set, whose iteration order changes with per-process string
+        # hashing, so ties in word frequency would otherwise be corrected differently on every run.
+        candidates = sorted(self._sp.candidates(lower) or ())
         in_domain = [c for c in candidates if c in self.domain]
         pool = in_domain or [c for c in candidates if c != lower]
         best = max(pool, key=self._sp.word_usage_frequency, default=word)
