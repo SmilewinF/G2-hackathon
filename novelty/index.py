@@ -39,7 +39,7 @@ def unit(v: np.ndarray) -> np.ndarray:
 @dataclass(frozen=True)
 class Entry:
     id: str
-    text: str  # prepared analysis text (normalised, spell-corrected, English only), not the display text
+    text: str  # PreparedText.analysis_text, not the display text
     submission: Submission | None  # None for the fixed content
     on_topic: bool  # contributes to the topic centroid
     shingles: frozenset[str]
@@ -58,7 +58,7 @@ class Analysis:
 
     submission: Submission
     prepared: PreparedText
-    text: str  # prepared text
+    text: str  # PreparedText.analysis_text, as stored in Entry.text
     vec: np.ndarray  # dense, whole text
     sims: np.ndarray  # hybrid similarity to every entry
     content_vec: np.ndarray | None  # dense, substantive body clauses only (None if there are none)
@@ -179,15 +179,16 @@ class ReferenceIndex:
                 self.clause_owner.append(idx)
                 self.clause_substantive.append(ok)
 
+        self._sync_sparse()
+
+    def _sync_sparse(self) -> None:
+        """Vectorise the counts that have no sparse vector yet; after a TF-IDF refit, all of them."""
         if self.tfidf.needs_refit:
             self.tfidf.refit()
             log.debug("TF-IDF refit at %d entries (version %d)", len(self.entries), self.tfidf.version)
             self._doc_sparse, self._clause_sparse = SparseVectors(), SparseVectors()
-            self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts)
-            self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts)
-        else:
-            self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts[len(self._doc_sparse):])
-            self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts[len(self._clause_sparse):])
+        self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts[len(self._doc_sparse):])
+        self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts[len(self._clause_sparse):])
 
     # ------------------------------------------------------------------ reading
 
@@ -228,7 +229,9 @@ class ReferenceIndex:
         return np.array(self._on_topic, dtype=bool)
 
     def hybrid(self, dense: np.ndarray, lexical: np.ndarray, lexical_confidence: float = 1.0) -> np.ndarray:
-        """``lexical_confidence`` < 1 shifts weight to the dense term for very short queries,
+        """Blend of embedding and TF-IDF similarity: ``dense_weight`` x dense + the rest x lexical.
+
+        ``lexical_confidence`` < 1 shifts weight to the dense term for very short queries,
         where a single rare word would otherwise dominate the TF-IDF cosine."""
         lw = (1.0 - self.dense_weight) * lexical_confidence
         return (1.0 - lw) * dense + lw * lexical
@@ -260,6 +263,7 @@ class ReferenceIndex:
         return vecs @ unit(topic) - vecs @ self.generic_vec
 
     def analyze(self, sub: Submission) -> Analysis:
+        """Prepare, embed and compare one submission with every entry, without adding it to the index."""
         prep = self.preparer.prepare(sub.headline, sub.body)
         cl, subst, text = prep.clauses, prep.substantive, prep.analysis_text
         content = _content_text(cl, subst)
@@ -268,6 +272,7 @@ class ReferenceIndex:
         clause_vecs = vecs[2 if content else 1 :]
         doc = count(text)
         lexical = self._doc_sparse.dot_all(self.tfidf.vector(doc))
+        lexical_confidence = min(1.0, sum(doc.values()) / FULL_LEXICAL_TOKENS)
         clause_lex = [self._doc_sparse.dot_all(self.tfidf.vector(count(c))) for c in cl]
         dense = self.dense
         return Analysis(
@@ -275,7 +280,7 @@ class ReferenceIndex:
             prepared=prep,
             text=text,
             vec=vec,
-            sims=self.hybrid(dense @ vec, lexical, min(1.0, sum(doc.values()) / FULL_LEXICAL_TOKENS)),
+            sims=self.hybrid(dense @ vec, lexical, lexical_confidence),
             content_vec=vecs[1] if content else None,
             clauses=cl,
             substantive=subst,

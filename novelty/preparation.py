@@ -49,17 +49,21 @@ FOREIGN_FUNCTION_WORDS = frozenset(
 
 _SENTENCE = re.compile(r"[^.!?;\n]+[.!?;\n]*")
 _TOKEN = re.compile(r"[^\W\d_][\w'/]*")  # Unicode-aware, so "debería" stays one token
+_FOREIGN_SCRIPT_SHARE = 0.3  # more non-ASCII letters than this share and a sentence is foreign outright
 
 
 @dataclass(frozen=True)
 class PreparedText:
+    """What the signals compare. ``clauses``, ``substantive`` and ``foreign`` are aligned: one
+    entry per clause of ``body``."""
+
     headline: str
     body: str
     clauses: tuple[str, ...]
     substantive: tuple[bool, ...]  # sentence-like English clause that makes a statement
     foreign: tuple[bool, ...]  # clause is not in a supported language
     corrections: tuple[tuple[str, str], ...]  # (original, replacement) pairs, for transparency
-    english_body: str = ""  # body with non-English sentences removed
+    english_body: str = ""  # prepared body without the sentences detected as non-English
 
     @property
     def text(self) -> str:
@@ -67,8 +71,9 @@ class PreparedText:
 
     @property
     def analysis_text(self) -> str:
-        """What similarity is computed on: only content the English-only signals can assess.
-        Otherwise untranslated sentences make any text look "unusual", i.e. novel."""
+        """What similarity is computed on: the prepared headline (kept whole) plus the body's English
+        sentences, so untranslated sentences cannot make a text look "unusual", i.e. novel. If no body
+        sentence is English, the whole body is kept."""
         return f"{self.headline}\n\n{self.english_body or self.body}"
 
 
@@ -77,9 +82,11 @@ class TextPreparer(Protocol):
 
 
 def looks_foreign(text: str) -> bool:
+    """True if ``text`` is not English: more than ``_FOREIGN_SCRIPT_SHARE`` of its letters are
+    non-ASCII, or it has at least two foreign function words and more of them than English stopwords."""
     letters = [c for c in text if c.isalpha()]
-    if letters and sum(not c.isascii() for c in letters) / len(letters) > 0.3:
-        return True  # mostly non-Latin script (look-alike letters were already mapped)
+    if letters and sum(not c.isascii() for c in letters) / len(letters) > _FOREIGN_SCRIPT_SHARE:
+        return True  # another script or heavily accented text (look-alike letters were already mapped)
     ws = words(text)
     foreign = sum(w in FOREIGN_FUNCTION_WORDS for w in ws)
     return foreign >= 2 and foreign > sum(w in STOPWORDS for w in ws)
@@ -118,7 +125,7 @@ class EnglishPreparer:
         candidates = self._sp.candidates(lower) or ()
         in_domain = [c for c in candidates if c in self.domain]
         pool = in_domain or [c for c in candidates if c != lower]
-        best = max(pool, key=lambda c: self._sp.word_usage_frequency(c), default=word) if pool else word
+        best = max(pool, key=self._sp.word_usage_frequency, default=word)
         self._cache[lower] = best
         return best
 
@@ -166,7 +173,8 @@ class EnglishPreparer:
         cl = tuple(clauses(b))
         foreign = tuple(looks_foreign(c) for c in cl)
         substantive = tuple(not f and is_substantive(c) for c, f in zip(cl, foreign))
-        return PreparedText(h, b, cl, substantive, foreign, tuple(hf + bf), b_en)
+        return PreparedText(headline=h, body=b, clauses=cl, substantive=substantive, foreign=foreign,
+                            corrections=tuple(hf + bf), english_body=b_en)
 
 
 class PassthroughPreparer:
@@ -174,5 +182,6 @@ class PassthroughPreparer:
 
     def prepare(self, headline: str, body: str) -> PreparedText:
         cl = tuple(clauses(body))
-        return PreparedText(headline, body, cl, tuple(is_substantive(c) for c in cl),
-                            tuple(False for _ in cl), (), body)
+        return PreparedText(headline=headline, body=body, clauses=cl,
+                            substantive=tuple(is_substantive(c) for c in cl),
+                            foreign=tuple(False for _ in cl), corrections=(), english_body=body)

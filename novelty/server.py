@@ -3,19 +3,23 @@
     python -m novelty serve [--port 8000]
 
 GET  /              the page (novelty/static/index.html)
-GET  /api/context   fixed content, corpus size, UI examples (two per stance), labelled probes
-POST /api/score     {"headline", "body", "stance", "commit": bool} -> ScoreBreakdown JSON
+GET  /api/context   fixed content, stances, corpus size, user count, UI examples (two per stance),
+                    labelled probes, embedder name
+POST /api/score     {"headline", "body", "stance", "commit": bool} -> {"corpus_size", "user_count",
+                    "result": ScoreBreakdown JSON with a "headline" added to each nearest entry,
+                    "id": the new id if admitted else null, "saved": bool (only when committed)}
                     commit=true runs submit(): the attempt is logged to data/user_submissions.json
                     and, if the admission policy accepts it, added to the corpus. Admitted entries
                     are replayed on the next start.
-POST /api/reset     forget all user submissions (deletes that file, rebuilds the scorer)
+POST /api/reset     forget all user submissions (deletes that file, forks the pristine seed-corpus
+                    scorer again instead of rebuilding it)
 
 User submissions are kept out of data/corpus.json on purpose: the tests and README numbers are
 calibrated against that fixed 50-item seed corpus.
 
-Errors always come back as JSON {"error": ..., "request_id": ...}: 400 for bad input, 503 when
-the embedding backend is unavailable, 500 otherwise (details in the server log under the same
-request id).
+Errors always come back as JSON {"error": ..., "request_id": ...}: 400 for bad input, 404 for an
+unknown path, 503 when the embedding backend is unavailable or an OSError (disk or network
+trouble) escapes a route, 500 otherwise (details in the server log under the same request id).
 """
 
 from __future__ import annotations
@@ -35,10 +39,11 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .data import USER_FILE, build_scorer, load_examples, load_probes
+from .data import USER_FILE, build_scorer, load_examples, load_probes, write_json_atomic
 from .errors import EmbeddingError, NoveltyError, ValidationError
+from .index import ARTICLE_ID
 from .logging_setup import configure_logging, request_id
-from .models import Stance, Submission
+from .models import ScoreBreakdown, Stance, Submission
 from .scorer import NoveltyScorer
 
 log = logging.getLogger(__name__)
@@ -108,10 +113,8 @@ class App:
             return []
 
     def _save(self) -> bool:
-        tmp = self.user_file.with_name(self.user_file.name + ".tmp")
         try:
-            tmp.write_text(json.dumps(self.records, indent=2) + "\n", encoding="utf-8")
-            os.replace(tmp, self.user_file)  # atomic: a crash mid-write cannot corrupt the log
+            write_json_atomic(self.user_file, self.records)  # a crash mid-write cannot corrupt the log
             return True
         except OSError as e:
             # The submission is already scored and (if admitted) in the corpus; losing the disk
@@ -126,7 +129,7 @@ class App:
         return sum(bool(r.get("admitted")) for r in self.records)
 
     def headline(self, entry_id: str) -> str:
-        if entry_id == "article":
+        if entry_id == ARTICLE_ID:
             return self.scorer.fixed.title
         entry = self.scorer.index.get(entry_id)
         return entry.submission.headline if entry and entry.submission else ""
@@ -137,7 +140,7 @@ class App:
             n += 1
         return f"u{n:02d}"
 
-    def submit(self, sub: Submission) -> tuple[Submission, object, bool]:
+    def submit(self, sub: Submission) -> tuple[Submission, ScoreBreakdown, bool]:
         sub = dataclasses.replace(sub, id=self._next_id())
         result = self.scorer.submit(sub)
         self.records.append({

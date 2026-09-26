@@ -9,16 +9,19 @@ Default signals (see ``novelty/signals``):
     modifier   duplicate        near-copy of a submission or of the article → 0
                quality          keyword lists, repetition, unsupported language → 0
                specificity      generic comments with no concrete point → scaled down
-               stance           rarer stance, up to +10 %
+               stance           discount by stance frequency, the most common −10 %
     relevance  relevance        contrastive topic margin of the substantive body → smooth gate
 
-Every signal self-calibrates against the corpus (no hard-coded cosine thresholds), so behaviour
-carries across embedding backends. ``submit`` only admits relevant, non-duplicate, substantive
+The similarity-based signals (whole_text, clause_coverage, relevance) self-calibrate against the
+corpus (no hard-coded cosine thresholds), so behaviour carries across embedding backends; stance
+uses the corpus stance frequencies, and the text checks (duplicate, quality, specificity) use
+fixed, model-independent limits. ``submit`` only admits relevant, non-duplicate, substantive
 submissions into the reference corpus, so spam and copy floods cannot shift the calibration.
 
-Logging (logger ``novelty.scorer``): every ``score``/``submit`` writes two INFO lines, the input
-and the result with its calculation and timing; DEBUG adds every signal, the nearest
-neighbours and the text-preparation corrections.
+Logging (logger ``novelty.scorer``): construction writes one INFO "scorer ready" line; every
+``score``/``submit`` writes two INFO lines, the input and the result with its calculation and
+timing; DEBUG adds the full body, every signal, the nearest neighbours, clause counts and the
+text-preparation corrections.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import dataclasses
 import logging
 import time
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -67,6 +70,7 @@ class ScorerConfig:
 
 
 def default_signals(config: ScorerConfig) -> list[Signal]:
+    """The standard signal set, parameterised by ``config``; extend the list to plug in more."""
     return [
         WholeTextNovelty(k=config.k, nearest_weight=config.nearest_weight),
         ClauseCoverage(),
@@ -79,6 +83,8 @@ def default_signals(config: ScorerConfig) -> list[Signal]:
 
 
 class NoveltyScorer:
+    """Scores submissions against the fixed content and a growing reference corpus (see module docstring)."""
+
     def __init__(
         self,
         fixed: FixedContent,
@@ -123,6 +129,7 @@ class NoveltyScorer:
         return copy.deepcopy(self, shared)
 
     def signal(self, name: str) -> Signal:
+        """The configured signal called ``name``; raises StopIteration if there is none."""
         return next(s for s in self.signals if s.name == name)
 
     def add(self, sub: Submission, on_topic: bool = True) -> None:
@@ -184,6 +191,7 @@ class NoveltyScorer:
     # ------------------------------------------------------------------ scoring
 
     def score(self, sub: Submission) -> ScoreBreakdown:
+        """Score against the current corpus without changing it (``submit`` also applies admission)."""
         start, stats = time.perf_counter(), self._embed_stats()
         self._log_input("score", sub)
         result = self._score(sub)
@@ -206,23 +214,24 @@ class NoveltyScorer:
         return result
 
     def _combine(self, results: dict[str, SignalResult], sims: np.ndarray) -> ScoreBreakdown:
-        by_kind = {k: [(s.name, results[s.name]) for s in self.signals if s.kind is k] for k in Kind}
-        novelty = min(r.value for _, r in by_kind[Kind.NOVELTY])
-        for _, r in by_kind[Kind.MODIFIER]:
-            novelty *= r.value
+        values = {k: [results[s.name].value for s in self.signals if s.kind is k] for k in Kind}
+        novelty = min(values[Kind.NOVELTY])
+        for v in values[Kind.MODIFIER]:
+            novelty *= v
         gate = 1.0
-        for _, r in by_kind[Kind.RELEVANCE]:
-            gate *= r.value
+        for v in values[Kind.RELEVANCE]:
+            gate *= v
 
         order = np.argsort(sims)[::-1][: self.config.k]
         nearest = [Neighbor(self.index.entries[i].id, round(float(sims[i]), 4)) for i in order]
 
-        def get(name: str, key: str | None = None, default=0.0):
+        def get(name: str, key: str | None = None, default: Any = 0.0) -> Any:
             r = results.get(name)
             if r is None:
                 return default
             return r.value if key is None else r.detail.get(key, default)
 
+        margin = get("relevance", "margin", None)
         return ScoreBreakdown(
             score=round(novelty * gate, 4),
             novelty=round(novelty, 4),
@@ -232,7 +241,7 @@ class NoveltyScorer:
             raw_novelty=round(get("whole_text", "raw"), 4),
             stance_rarity=round(get("stance", "rarity"), 4),
             relevance=round(get("relevance", "relevance", 1.0), 4),
-            relevance_margin=None if get("relevance", "margin", None) is None else round(get("relevance", "margin"), 4),
+            relevance_margin=None if margin is None else round(margin, 4),
             relevance_gate=round(gate, 4),
             near_duplicate_of=get("duplicate", "of", None),
             nearest=nearest,
@@ -251,8 +260,8 @@ class NoveltyScorer:
         if not log.isEnabledFor(logging.INFO):
             return
         parts = [f"{len(self.corpus)} submissions", f"embedder {self.embedder.name}"]
-        whole, rel = next((s for s in self.signals if s.name == "whole_text"), None), \
-            next((s for s in self.signals if s.name == "relevance"), None)
+        whole = next((s for s in self.signals if s.name == "whole_text"), None)
+        rel = next((s for s in self.signals if s.name == "relevance"), None)
         if whole is not None and hasattr(whole, "scale"):
             parts.append(f"novelty median {whole.scale.median:.3f} (scale {whole.scale.scale:.3f})")
         if rel is not None and hasattr(rel, "on_topic_margin"):
@@ -282,7 +291,7 @@ class NoveltyScorer:
         if stats is not None and now is not None:
             timing += f" (embed {(now[1] - stats[1]) * 1000:.0f} ms, {now[0] - stats[0]} new)"
         parts.append(timing)
-        flags = [x for x in r.reasons if not x.startswith("novelty z=") and x != admission]
+        flags = [x for x in r.reasons if not x.startswith(WholeTextNovelty.Z_REASON_PREFIX) and x != admission]
         if flags:
             parts.append("flags: " + preview("; ".join(flags), 160))
         log.info("%s result: id=%s %s", action, sub.id or "-", " | ".join(parts))

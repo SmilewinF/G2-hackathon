@@ -7,7 +7,8 @@
 
 Global options: --log-level LEVEL, or -v for DEBUG. Logs go to stderr (and NOVELTY_LOG_FILE if
 set). ``score`` and ``serve`` log at INFO by default; ``demo`` and ``corpus`` only warnings, so
-their tables stay readable. Exit codes: 0 ok, 2 a reported error, 130 interrupted.
+their tables stay readable. Exit codes: 0 ok (including ``serve`` stopped with Ctrl+C), 2 a
+reported error or bad arguments, 130 interrupted.
 """
 
 from __future__ import annotations

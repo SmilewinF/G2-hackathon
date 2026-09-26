@@ -23,6 +23,10 @@ class WholeTextNovelty(Signal):
 
     name = "whole_text"
     kind = Kind.NOVELTY
+    Z_REASON_PREFIX = "novelty z="  # start of the reason every evaluation adds; NoveltyScorer's result log line omits it
+    # Calibrated state, set by fit()/update(). Annotations only, so hasattr() is False until then.
+    loo: dict[str, float]  # leave-one-out raw novelty of each corpus submission, by id
+    scale: RobustScale  # calibration of raw novelty
 
     def __init__(self, k: int = 5, nearest_weight: float = 0.5) -> None:
         self.k = k
@@ -33,14 +37,16 @@ class WholeTextNovelty(Signal):
         w = self.nearest_weight
         return w * (1.0 - top[..., 0]) + (1.0 - w) * (1.0 - top.mean(axis=-1))
 
-    def raw(self, sims: np.ndarray) -> float:
-        return float(self._raw_top(np.sort(sims)[::-1][: self.k]))
-
     def _top(self, row: np.ndarray) -> np.ndarray:
+        """The k largest values of ``row``, in descending order."""
         k = self.k
         if len(row) <= k:
             return np.sort(row)[::-1]
         return np.sort(row[np.argpartition(row, -k)[-k:]])[::-1]
+
+    def raw(self, sims: np.ndarray) -> float:
+        """Uncalibrated novelty of one similarity row (reported as ``raw_novelty``)."""
+        return float(self._raw_top(self._top(sims)))
 
     def fit(self, index: ReferenceIndex) -> None:
         if len(index.submission_indices) <= self.k:
@@ -80,7 +86,7 @@ class WholeTextNovelty(Signal):
         nearest = int(np.argmax(a.sims))
         return SignalResult(
             self.scale(raw),
-            [f"novelty z={z:+.2f} vs. corpus (nearest {index.entries[nearest].id} @ {a.sims[nearest]:.2f})"],
+            [f"{self.Z_REASON_PREFIX}{z:+.2f} vs. corpus (nearest {index.entries[nearest].id} @ {a.sims[nearest]:.2f})"],
             {"raw": raw, "z": z},
         )
 
@@ -94,12 +100,17 @@ class ClauseCoverage(Signal):
     most novel on-topic one fixes both: every clause of a kitchen-sink comment is already covered,
     and padding is off-topic so it cannot supply the novelty.
 
+    It applies only when the body has at least two substantive clauses. With exactly one, that
+    clause is the whole text, so the signal stays neutral (1.0, ``applied=False``) and leaves it to
+    ``WholeTextNovelty``; with none, it returns 0.
+
     Calibration keeps each stored clause's best similarity to any *other* entry; inserting entry
     j is one clause-column (O(clauses)) plus rows for j's own clauses.
     """
 
     name = "clause_coverage"
     kind = Kind.NOVELTY
+    scale: RobustScale  # calibration of 1 - best clause similarity, set by fit()/update()
 
     def __init__(self) -> None:
         self._version: int | None = None
@@ -109,13 +120,14 @@ class ClauseCoverage(Signal):
         s[index.clause_owner[c]] = -np.inf  # leave-one-out: a clause is trivially covered by its own comment
         return float(s.max())
 
-    def _calibrated(self, index: ReferenceIndex, c: int) -> bool:
+    def _in_calibration_set(self, index: ReferenceIndex, c: int) -> bool:
+        """Clause ``c`` counts toward calibration: substantive, and owned by a submission (not the article)."""
         return index.clause_substantive[c] and index.entries[index.clause_owner[c]].is_submission
 
     def fit(self, index: ReferenceIndex) -> None:
         n = len(index.clause_owner)
         self._best = np.full(n, -np.inf)
-        self._mask = np.array([self._calibrated(index, c) for c in range(n)], dtype=bool)
+        self._mask = np.array([self._in_calibration_set(index, c) for c in range(n)], dtype=bool)
         for c in np.flatnonzero(self._mask):
             self._best[c] = self._clause_best(index, c)
         self._version = index.version
@@ -127,7 +139,7 @@ class ClauseCoverage(Signal):
         before = len(self._best)
         total = len(index.clause_owner)
         self._best = np.concatenate([self._best, np.full(total - before, -np.inf)])
-        new_mask = np.array([self._calibrated(index, c) for c in range(before, total)], dtype=bool)
+        new_mask = np.array([self._in_calibration_set(index, c) for c in range(before, total)], dtype=bool)
         self._mask = np.concatenate([self._mask, new_mask])
         for j in added:  # existing clauses gain one more entry they may be covered by
             col = index.clause_sims_to_entry(j)[:before]

@@ -1,8 +1,8 @@
 """Text normalisation and lightweight linguistic helpers shared by every signal.
 
-Everything that compares text goes through ``normalize`` first (it runs inside ``Submission``),
-so evasion tricks like zero-width characters or Cyrillic look-alike letters cannot make a copy
-look new to the lexical or semantic checks.
+Every submission goes through ``normalize`` first (it runs inside ``Submission``), so evasion
+tricks like zero-width characters or Cyrillic look-alike letters cannot make a copy look new to
+the lexical or semantic checks. The fixed content and the off-topic anchors are not normalised.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ _CONFUSABLE_MAP = {
     "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
 }
 _CONFUSABLES = str.maketrans(_CONFUSABLE_MAP)
+_LATIN_MAX_FOREIGN_SHARE = 0.2  # below this share of non-ASCII, non-look-alike letters, text counts as Latin-script
 
 STOPWORDS = frozenset(
     """a an the and or but if of to in on at by for with from as is are was were be been being it
@@ -38,12 +39,16 @@ _CLAUSE_SPLIT = re.compile(r"[.!?;:]+\s*|,\s+(?:and\s+|but\s+)?|\s+(?:and|but)\s
 
 
 def normalize(text: str) -> str:
+    """Canonical form of user text: NFKC; invisible characters removed; ASCII control characters
+    other than tab and newline turned into spaces; look-alike Cyrillic/Greek letters mapped to Latin
+    when the text is essentially Latin-script; runs of spaces and tabs collapsed to one space; three
+    or more newlines in a row cut to two; leading/trailing whitespace stripped."""
     text = unicodedata.normalize("NFKC", text)
     text = _INVISIBLE.sub("", text)
     text = _CONTROL.sub(" ", text)
     letters = [c for c in text if c.isalpha()]
     foreign = sum(1 for c in letters if not c.isascii() and c not in _CONFUSABLE_MAP)
-    if letters and foreign / len(letters) < 0.2:
+    if letters and foreign / len(letters) < _LATIN_MAX_FOREIGN_SHARE:
         text = text.translate(_CONFUSABLES)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)

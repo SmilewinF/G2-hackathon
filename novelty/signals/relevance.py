@@ -22,6 +22,8 @@ class TopicMargin(Signal):
 
     name = "relevance"
     kind = Kind.RELEVANCE
+    loo: dict[str, float]  # leave-one-out margin of each on-topic corpus submission, set by fit()
+    on_topic_margin: float  # median of loo; margins are divided by it
 
     def __init__(self, floor: float = 0.1, full: float = 0.5, min_on_topic_margin: float = 0.01) -> None:
         self.floor = floor

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from ..index import Analysis, ReferenceIndex
 
 MIN_SCALE = 0.01  # floor for robust spread, so a near-constant corpus cannot blow up z-scores
+MAD_TO_SIGMA = 1.4826  # makes the MAD a consistent estimate of the standard deviation for normal data
 
 
 class Kind(str, Enum):
@@ -56,11 +57,18 @@ class Signal(ABC):
 
     def update(self, index: ReferenceIndex, added: range) -> None:
         """Recalibrate after entries ``added`` were inserted. Defaults to a full ``fit``; signals
-        with expensive calibration override it with an incremental update."""
+        with expensive calibration override it with an incremental update.
+
+        This is also the initial calibration: the scorer calls ``update`` at construction with the
+        whole seed corpus in ``added``. It calls ``fit`` only as a fallback when ``update`` raises
+        an exception other than ``NoveltyError``. An override must therefore fall back to ``fit``
+        while it holds no calibrated state (as ``WholeTextNovelty`` and ``ClauseCoverage`` do
+        through ``_version``)."""
         self.fit(index)
 
     @abstractmethod
-    def evaluate(self, analysis: Analysis, index: ReferenceIndex) -> SignalResult: ...
+    def evaluate(self, analysis: Analysis, index: ReferenceIndex) -> SignalResult:
+        """Assess one analysed submission against the index (read-only); the value is in [0, 1]."""
 
 
 def normal_cdf(z: float) -> float:
@@ -84,7 +92,7 @@ class RobustScale:
         if len(values) == 0:
             raise ValueError("cannot calibrate on an empty distribution")
         med = float(np.median(values))
-        mad = float(np.median(np.abs(values - med))) * 1.4826
+        mad = float(np.median(np.abs(values - med))) * MAD_TO_SIGMA
         return cls(med, max(mad, MIN_SCALE))
 
     def z(self, x: float) -> float:
