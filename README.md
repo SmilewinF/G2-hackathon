@@ -47,7 +47,7 @@ score   = novelty × Π(relevance signals)
 | `duplicate` | modifier | Near-copy of a submission **or of the article itself** → 0 |
 | `quality` | modifier | Keyword lists, word repetition, no sentence-like content, unsupported language → 0 |
 | `specificity` | modifier | Fewer than 4 specific content words (generic praise) → scaled down |
-| `stance` | modifier | Rarer stance, up to +10% |
+| `stance` | modifier | Stance rarity: ×0.9 for the most common stance, up to ×1.0 for the rarest |
 | `relevance` | relevance | Contrastive topic margin of the substantive body → smooth gate |
 
 Taking the **min** of the novelty signals means both views must agree that something is new. **Multiplying** by relevance means high novelty can't make up for being off-topic, and being on-topic can't make up for being a repeat.
@@ -60,7 +60,7 @@ Taking the **min** of the novelty signals means both views must agree that somet
 4. **Clause coverage.** The body is split into clauses, and each relevant, substantive clause is scored against the corpus with the same calibration done at clause level. This catches two attacks that whole-text similarity misses:
    - A "kitchen sink" comment that restates every existing take in one text. It sits between clusters, so it looks far from each one, but every clause is already covered.
    - A stock take padded with unrelated text. The padding is off-topic, so it can't supply the novelty.
-5. **Modifiers.** Copies of a submission or of the article get 0 (≥ 60% character 5-gram containment). Text that makes no statement gets 0. Stance adjusts novelty by at most ±10% and multiplies, so it can never rescue a copy.
+5. **Modifiers.** Copies of a submission or of the article get 0 (≥ 60% character 5-gram containment). Text that makes no statement gets 0. Stance multiplies novelty by 0.9–1.0 (×0.9 for the most common stance, up to ×1.0 for the rarest), so it can never rescue a copy.
 
 ### Relevance
 
@@ -108,7 +108,7 @@ Every attack below was run against the earlier version of the pipeline, and each
 | Attack | Before | Now | Defence |
 |---|---:|---:|---|
 | Keyword stuffing ("…sourdough… garage park Elm Street levy") | 0.61 | **0.00** | relevance measured on the substantive body only |
-| "Kitchen sink" listing every existing take | 0.81 | **0.24** | clause coverage |
+| "Kitchen sink" listing every existing take | 0.81 | **0.23** | clause coverage |
 | "park" × 40 | 0.77 | **0.00** | content-quality check |
 | Stock take padded with crypto spam | 0.66 | **0.00** | clause coverage + relevance on content |
 | Echoing the article | 0.45 | **0.00** | the article is a reference item for copy detection |
@@ -116,7 +116,7 @@ Every attack below was run against the earlier version of the pipeline, and each
 | Copy using Cyrillic look-alike letters or zero-width characters | copy undetected | **caught** | text normalisation |
 | Flooding the corpus with 20 template variants of one take | n/a | probe scores move ≤ 0.15 | admission policy + robust calibration |
 
-These already held up and are pinned as tests too: sentence shuffles, synonym swaps, negation, concatenating two existing comments, gibberish, URL spam, emoji walls and prompt injection. A **positive control** checks that the new-idea probes still score ≥ 0.6 on every signal, including with a friendly opener ("Great to see this passing…").
+These already held up and are pinned as tests too: sentence shuffles, synonym swaps, concatenating two existing comments, gibberish, URL spam, emoji walls and prompt injection. **Positive controls** check that the new-idea probes still score ≥ 0.6 (with clause novelty ≥ 0.6), and that a new idea with a friendly opener ("Great to see this passing…") still scores ≥ 0.5.
 
 ### Input edge cases
 
@@ -128,9 +128,9 @@ These are covered by [tests/test_edge_cases.py](tests/test_edge_cases.py). The r
 | English stock take + Spanish novel idea | 0.11 | the untranslated half can't be assessed, so it can't supply novelty (was 0.49) |
 | Spanish only | 0.00 | "not in a supported language" |
 | Short novel idea: "Put EV chargers at the outer shuttle lot." | 0.83 | a single clause is judged by whole-text novelty (was 0.05) |
-| Short stock take: "No parking means shops will close." | 0.00 | TF-IDF weight shrinks for very short text, so one rare word can't dominate |
-| Short generic praise: "I love this park idea!" | 0.00 | specificity (was 0.41) |
-| 129-word novel essay / 100-word rehash of existing takes | 0.70 / 0.28 | |
+| Short stock take: "No parking means shops will close." | 0.08 | TF-IDF weight shrinks for very short text, so one rare word can't dominate |
+| Short generic praise: "I love this park idea!" | 0.01 | specificity (was 0.41) |
+| 122-word novel essay / 100-word rehash of existing takes | 0.70 / 0.28 | |
 | Half off-topic chatter + half novel idea | 0.74 | the novel half is rewarded |
 | Novel idea in broken English, heavy typos, texting style, ESL grammar | 0.55–0.89 | relevance gate stays open |
 | Stock take with heavy typos ("Withot the garaje peple cant park…") | 0.02 | spelling correction (was **0.86**: typos read as novelty) |
@@ -145,7 +145,7 @@ The web server is hardened as well:
 ## 5. Automated tests
 
 ```
-pytest            # 158 tests, ~2 s after the first model download
+pytest            # 168 tests, ~2 s after the first model download
 ```
 
 | Requirement from the brief | Test ([tests/test_behavior.py](tests/test_behavior.py)) |
@@ -161,8 +161,10 @@ The other test files cover the rest:
 - [tests/test_adversarial.py](tests/test_adversarial.py): the attacks above.
 - [tests/test_edge_cases.py](tests/test_edge_cases.py): mixed languages, very short and very long input, and poor English.
 - [tests/test_math.py](tests/test_math.py): the maths, text normalisation, calibration guards, plugging in a custom signal, and a check that incremental calibration equals a full refit. It uses a toy embedder, so no model is needed.
+- [tests/test_errors_logging.py](tests/test_errors_logging.py): the error hierarchy, data-file and embedding failures (including Gemini retries), the scorer's log lines, HTTP error codes, and CLI and generator exit codes.
 - [tests/test_server.py](tests/test_server.py): the HTTP API, persistence and malformed requests.
 - [tests/test_shape.py](tests/test_shape.py): the data contract.
+- [tests/test_examples.py](tests/test_examples.py): the web UI's examples in data/examples.json behave as labelled.
 
 Tests are pinned to the local model so they're deterministic and need no key. `NOVELTY_TEST_EMBEDDER=gemini pytest` runs the same behavioural suite on Gemini.
 
@@ -178,23 +180,23 @@ Once a probe has been submitted through the UI, it's no longer novel, so the tes
 
 ## Logging and errors
 
-Every scored input leaves two INFO lines: the input, and the result with its calculation and timing. With `-v` (DEBUG) you also get every signal, the nearest neighbours and the spelling corrections:
+Every scored input leaves two INFO lines: the input, and the result with its calculation and timing. With `-v` (DEBUG) you also get the full body, every signal, the nearest neighbours, the clause counts and the spelling corrections (timestamps and the other DEBUG lines are left out below):
 
 ```
 INFO    [r000007] novelty.scorer: submit input: id=u03 stance=support words=19 headline="Design the park to soak up floods"
+DEBUG   [r000007] novelty.scorer: calculation: whole_text=0.914 clause_coverage=0.957 duplicate=1.000 quality=1.000 specificity=1.000 stance=0.900 relevance=1.000 | nearest c07:0.50 c08:0.48 ... | clauses 2 (substantive 2, foreign 0) | corrections: none
 INFO    [r000007] novelty.scorer: submit result: id=u03 score=0.822 = novelty 0.822 x gate 1.00 | whole 0.91 clause 0.96 | relevance 1.00 margin +0.171 | added to corpus | 29 ms (embed 26 ms, 4 new)
-DEBUG   [r000007] novelty.scorer: calculation: whole_text=0.914 clause_coverage=0.957 duplicate=1.000 quality=1.000 specificity=1.000 stance=0.900 relevance=1.000 | nearest c07:0.50 c08:0.48 ... | corrections: none
 ```
 
-**Configuration:** `NOVELTY_LOG_LEVEL` sets the level, `NOVELTY_LOG_FILE` also writes to a file, and on the CLI `--log-level` or `-v` overrides both. The `[r000007]` request id ties together the lines from one web request, and it's returned in every error response.
+**Configuration:** `NOVELTY_LOG_LEVEL` sets the level (default INFO; the `demo` and `corpus` commands default to WARNING so their tables stay readable), `NOVELTY_LOG_FILE` also appends to a file, and on the CLI `--log-level` or `-v` overrides `NOVELTY_LOG_LEVEL`. The `[r000007]` request id ties together the lines from one web request, and it's returned in every error response.
 
 **Errors:** every error is a `NoveltyError` ([novelty/errors.py](novelty/errors.py)).
 - `ValidationError` for bad input → HTTP 400.
 - `DataError` names the file and item.
 - `EmbeddingError` for a model or network failure → HTTP 503. Gemini retries transient errors only.
-- `CalibrationError` and `ScoringError` name the failing signal.
+- `CalibrationError` when the reference data can't support a calibration (too few submissions, no off-topic anchors, or anchors the embedder can't tell apart from the corpus). `ScoringError` names the failing signal.
 
-The CLI prints `error: ...` and exits with code 2. Anything that's only an optimisation degrades with a warning instead of failing: the embedding cache, spelling correction, and saving the submissions log.
+The CLI prints `error: ...` and exits with code 2. Anything that's only an optimisation is logged and degrades instead of failing: the embedding cache, spelling correction, and saving the submissions log (the response then says `"saved": false`).
 
 ## Architecture
 
@@ -212,8 +214,10 @@ novelty/
     modifiers.py   DuplicateCheck, ContentQuality, Specificity, StanceRarity
     relevance.py   TopicMargin
   scorer.py        NoveltyScorer: analyse → evaluate signals → combine → admission policy
+  data.py          loaders for data/*.json (DataError names file and item), build_scorer()
   errors.py        NoveltyError hierarchy (each also a ValueError / RuntimeError)
   logging_setup.py configure_logging() for entry points; request-id tag per log line
+  __main__.py      CLI: demo / corpus / score / serve, --log-level / -v, exit codes
   server.py        stdlib HTTP server + static/index.html
 ```
 
@@ -271,6 +275,8 @@ python -m novelty demo                     # now uses gemini-embedding-001
 python scripts/generate_corpus.py          # regenerate a synthetic corpus → data/corpus.generated.json
 ```
 
+**Environment variables:** `NOVELTY_EMBEDDER=local|gemini` forces a backend (default: gemini when `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set, otherwise local). `NOVELTY_CACHE_DIR` moves the model and embedding cache (default `.cache/`), for example to share one cache between git worktrees. `GEMINI_MODEL` picks the model `scripts/generate_corpus.py` uses (default `gemini-2.5-flash`). For logging and tests, see `NOVELTY_LOG_LEVEL` / `NOVELTY_LOG_FILE` and `NOVELTY_TEST_EMBEDDER` / `NOVELTY_TEST_CORPUS` above.
+
 The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only, responsive, light and dark themes) shows:
 - the article
 - a form for the three properties
@@ -279,7 +285,7 @@ The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library 
 
 It has three buttons:
 - **Score** leaves the corpus unchanged.
-- **Score & add to corpus** submits the comment. If the admission policy accepts it, it joins the corpus, so the same idea scores lower next time. If it's rejected, the page says so and why. Every attempt is logged to `data/user_submissions.json` (gitignored), and admitted ones are replayed when the server restarts.
+- **Score and add to corpus** submits the comment. If the admission policy accepts it, it joins the corpus, so the same idea scores lower next time. If it's rejected, the page says so and why. Every attempt is logged to `data/user_submissions.json` (gitignored), and admitted ones are replayed when the server restarts.
 - **Reset my submissions** clears the log.
 
 User submissions are deliberately kept out of `data/corpus.json`, the fixed 50-item seed corpus that the tests and the numbers above are calibrated against.

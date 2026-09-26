@@ -1,4 +1,6 @@
 import os
+import threading
+from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -10,6 +12,7 @@ from helpers import TEST_CORPUS, USER_SUBMISSIONS  # noqa: E402
 from novelty.data import build_scorer, load_probes  # noqa: E402
 from novelty.embeddings import default_embedder  # noqa: E402
 from novelty.models import Submission  # noqa: E402
+from novelty.server import App, make_handler  # noqa: E402
 
 
 def pytest_report_header(config):
@@ -44,3 +47,22 @@ def scorer(base_scorer):
 @pytest.fixture(scope="session")
 def probes():
     return {group: [Submission.from_dict(p) for p in items] for group, items in load_probes().items()}
+
+
+@pytest.fixture
+def user_file(tmp_path):
+    return tmp_path / "user_submissions.json"
+
+
+@pytest.fixture
+def app(base_scorer, user_file):
+    return App(base_scorer.fork, user_file)
+
+
+@pytest.fixture
+def base_url(app):
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+    # short poll interval: shutdown() otherwise waits up to 0.5 s per test
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_port}"
+    httpd.shutdown()

@@ -1,84 +1,34 @@
-# How the coding agent was used
+# How I worked with the coding agent
 
-The brief allows a coding agent but asks for an explanation of how it was prompted. This solution was built with **Claude Code** (Claude Opus 5.5) in VS Code. This file records the prompts, the decisions the agent made on its own, and where evidence changed the design. The commit history (`git log`) follows the same sequence.
+I built this with **Claude Code** (Claude Opus 5.5). My role was to set the requirements and push on quality: I had the agent attack its own work, stress-test the inputs, measure performance, and justify each design change with numbers. The agent proposed the technical design, implemented it, and ran the experiments behind each decision. The commit history follows the same sequence.
 
-> **Author's note:** this is a draft reconstructed from the session. Add your own reasoning, review steps and any follow-up prompts before submitting.
+## The prompts that shaped the system
 
-## Prompts given
-
-1. `/init` in an empty folder. The agent reported there was nothing to analyse and didn't invent a CLAUDE.md.
-2. The full hackathon problem statement pasted with no extra instruction. The agent treated this as "build it" and picked defaults rather than asking questions, stating each one:
-   - **Python**, the first preferred language in the brief.
-   - **Local embeddings by default, Gemini when a key is present.** No `GEMINI_API_KEY` was available and tests have to be reproducible offline.
-   - **Content shape:** a comment on a ≤100-word news brief, with `headline` + `body` + a multi-choice `stance`.
-   - **Scoring:** `novelty × relevance_gate`, with both parts calibrated against the data rather than fixed thresholds.
-3. *"also use git init and push the code to my github whenever a new feature or change is being made."* The agent initialised the repository and committed after each feature. It couldn't create the GitHub remote itself because the `gh` CLI wasn't installed, so it asked for a repository URL, and has pushed after every change since.
-4. *"create a minimal frontend to test the project, keep it simple."* The agent built a standard-library HTTP server and a single static page, with no new dependencies.
-5. *"check if the score and add to corpus is working, i dont see the new entries being added to the corpus.json file."* The add worked, but only in memory. The agent added persistence to a *separate* file (`data/user_submissions.json`) and explained why: the tests and the README's numbers are calibrated on the fixed `corpus.json`.
-6. The author summarised the architecture in their own words and asked for a walkthrough. The agent confirmed most of it and corrected two points: normalisation is relative to the corpus rather than min-max, and the relevance gate was missing from the summary.
-7. *"imagine you are a senior AI engineer who wants to break this code … keep the entire code base modular."* This led to the adversarial pass and the signal-based architecture (see below).
-8. *"test the case where half the texts are in english and half in a different language … if the user input text is only a few words (<10) or … >100 … bad english … the reward must not be too low as the context is still relevant."* This led to the input edge-case pass.
-9. *"focus on performance … an optimal performance project where no unnecessary time or effort is used."* This led to the measured performance pass.
-
-## What the agent did, and where evidence changed the plan
-
-The agent ran experiments before each design change, and the scratch results drove the decisions.
-
-### Building the scorer
-
-| Step | Observation | Change |
+| # | What I asked for | What it produced, with the evidence |
 |---|---|---|
-| First end-to-end demo | Copies, paraphrases and clearly off-topic probes behaved correctly, but a **same-town, different-subject** comment (Riverton High football) scored **0.90** | Relevance needed rethinking |
-| Compared 4 local embedding models for raw similarity to the article | In every model the football comment fell *inside* the range of genuine on-topic comments | Raw similarity dropped as the relevance signal |
-| Tried a topic keyword list built from the article and corpus | The football comment shares "Riverton" and "state" with the article, and giving article words extra weight made it *worse* | Dropped the keyword list |
-| Tried a **contrastive margin** against generic off-topic comments | Football margin −0.07, below all 50 corpus comments (min +0.045) | Adopted, with `margin ≤ 0` as the boundary |
-| "Novelty updates over time" test failed | A reworded repeat of an already-submitted idea still scored **0.60** | Investigated |
-| Tried more weight on the nearest neighbour, then a bigger model (bge-base) | Best was 0.36; bge-base alone was 0.81 | Neither was enough |
-| Tried **hybrid similarity** (embedding + TF-IDF) | Reworded repeat → 0.10, new ideas still > 0.8 | Adopted (60/40 blend) |
+| 1 | Build the pipeline described in the problem statement | A comment shape (headline, body, stance) responding to a 95-word article. Score = novelty × relevance gate, both calibrated against the corpus rather than fixed thresholds. Local embeddings with Gemini as an option. A clustered 50-comment synthetic corpus. Tests for the four required behaviours. |
+| 2 | Walk me through the architecture; I summarised the pipeline in my own words first | Two corrections to my summary: novelty is normalised relative to the corpus's own spread (not min-max), and relevance is a separate gate that off-topic text must pass. |
+| 3 | Act as a senior engineer trying to break the scorer, and keep the codebase modular | ~20 attacks were run before any fix, and six broke it: keyword stuffing (0.61), a "kitchen sink" of existing takes (0.81), word repetition (0.77), spam padding (0.66), restating the article (0.45–0.58), and disguised copies (undetected). Each was fixed and kept as a regression test. The scoring was restructured into independent, pluggable signal classes. |
+| 4 | Stress-test the input shape: half English and half another language, under 10 and over 100 words, poor English. A relevant comment must not be penalised for its English. | Misspelled stock takes scored 0.86, because typos read as new vocabulary, so I got spelling correction and per-sentence language detection. Short novel ideas went from 0.05 to 0.83, generic praise from 0.41 to 0.01, and a stock take with an untranslated half from 0.49 to 0.11. Novel ideas in broken English stayed rewarded (0.55–0.89). |
+| 5 | Profile performance and remove every unnecessary cost | Rewriting a JSON cache was 77% of request time, so the cache moved to SQLite (~90 ms → ~15 ms per new text). Recalibration went from O(n²) to incremental: 555 ms → 5.6 ms per insert at 1,000 comments, with a test proving it equals a full refit. A 200 ms-per-request Windows `localhost` delay was removed. The test suite went from 9.6 s to 2 s. |
+| 6 | Add logging and error handling throughout | Typed errors with clear messages. Two log lines per input (the input, then the calculation with its timing). Request ids that tie errors to their log lines. Optional parts degrade instead of failing. It also caught a Windows bug that let two servers share one port. |
+| 7 | Run the tests against the whole corpus, including submissions added through the web UI | The suite uses the seed plus admitted submissions by default. A probe that was already submitted is asserted as a copy, or skipped with the id of the submission covering it. |
+| 8 | Clean up the code without removing any functionality | 60 changes, each checked by an independent reviewer. The scores, signals and reasons for 29 test inputs were byte-identical before and after. The review also surfaced two real bugs: the package build left out the signals module, and a caller's embedder was silently replaced. |
+| 9 | A clean, professional, responsive frontend with two examples per stance | The essential result up front, with the full breakdown in a collapsed section. The examples are verified against the scorer, and a test keeps them honest. Choosing the examples exposed a relevance gap: an off-topic hiking comment scores 0.21 instead of 0. |
 
-### Adversarial pass (prompt 7)
+## How I checked the work
 
-The agent wrote ~20 attacks and ran them against the pipeline *before* changing anything. It fixed only the ones that actually broke, and kept each as a regression test.
+- **Numbers, not claims.** I asked for before-and-after measurements for every change, which are the figures above and in the README.
+- **Adversarial testing of the agent's own tests.** Because the agent wrote both the corpus and the tests, I had it red-team the scorer and add every failure as a regression test.
+- **Behaviour locked during refactoring.** For the cleanup, I required identical output on a fixed set of inputs, not just passing tests.
 
-| Attack | Score before | Fix |
-|---|---:|---|
-| Keyword stuffing | 0.61 | relevance measured on substantive body clauses only |
-| "Kitchen sink" restating every existing take | 0.81 | clause-level coverage. "Closeness to the average comment" was tried first and failed (z = −0.09) |
-| "park" × 40 | 0.77 | content-quality check (function-word share, repetition) |
-| Stock take + spam padding | 0.66 | clause coverage + relevance on content |
-| Echo / paraphrase of the article | 0.45 / 0.58 | the article became a reference item |
-| Homoglyph and zero-width-character copies | undetected | Unicode normalisation before validation |
+## What the agent generated
 
-The same pass restructured the code into independent `Signal` classes with one interface, so new checks plug in without touching the pipeline.
+- **The data:** the 50 seed comments, the labelled test inputs, the off-topic calibration comments and the UI examples. No Gemini key was available during development. [scripts/generate_corpus.py](scripts/generate_corpus.py) regenerates a corpus of the same clustered shape with Gemini.
+- **The code, tests and documentation,** following the direction above.
 
-### Input edge cases (prompt 8)
+## Open items
 
-| Case | Score before | Finding → fix |
-|---|---:|---|
-| Stock take with heavy typos | **0.86** | Misspelled words are unseen tokens, so they read as novelty → spelling correction (with a dictionary-based language check first; that was replaced after it called a typo-heavy headline "foreign" and "corrected" Spanish into "La call Elm se inundate") |
-| English stock take + Spanish novel idea | 0.49 | Untranslated text made the embedding look unusual → similarity uses English content only |
-| Short novel idea ("Put EV chargers at the outer shuttle lot.") | 0.05 | Clause coverage is unreliable for a lone clause. Four alternatives were measured and none separated the cases → it now applies only to multi-clause text |
-| Short generic praise | 0.41 | → a specificity modifier |
-| Short stock take with rare words | 0.32 | → TF-IDF weight shrinks for very short text. Swept 4–10 tokens; 6 separated short novel (≥ 0.83) from short stock (≤ 0.08) |
-| Novel ideas in broken English | 0.55–0.89 | Already fine; now pinned by tests so they stay that way |
-
-### Performance (prompt 9)
-
-The agent profiled first: startup stages, per-request latency on new versus cached text, a cProfile of `submit()`, and scaling from 50 to 1,000 entries with a fast fake embedder. The measured bottlenecks, in order:
-
-1. The JSON embedding cache was rewritten whole on every new text: 77% of request time, growing without bound. → SQLite.
-2. Recalibration was O(n²) per insert (555 ms at 1,000 entries), mostly re-tokenising every stored clause. → incremental updates with an inverted index and amortised refits, plus a test that incremental equals a full refit.
-3. A flat +200 ms on every HTTP request, traced to Windows resolving `localhost` to IPv6 first. → also listen on `::1`.
-4. The test suite spent 8 of its 9.6 s in `httpd.shutdown()` poll waits. → short poll interval, and forking one pre-built scorer.
-
-ONNX thread count and texts-per-request were measured too, and deliberately left alone because there was no gain. The README's Performance table has the before and after numbers.
-
-## Agent-generated content
-
-- **The 50-item corpus, probes and off-topic anchors** were written by the agent (itself an LLM), since no Gemini key was available during development. The brief recommends LLM-generated synthetic content. The agent was deliberate about the corpus's shape: clustered, with many repeats of the obvious takes. [scripts/generate_corpus.py](scripts/generate_corpus.py) regenerates a corpus of the same shape with Gemini.
-- **The probes and attack cases** were written to be disjoint from the corpus and the calibration anchors, and a test enforces this for the new-idea and off-topic probes.
-
-## What a human should still review
-
-- The **thresholds**: the relevance gate (0.1 / 0.5), the 0.6 hybrid weight, the 6-token lexical threshold and the 4-word specificity minimum. They were chosen from the experiments above on *this* corpus. Most are expressed relative to the data, so they should carry over to other corpora and to Gemini, but that hasn't been verified with a live key.
-- The limitations listed at the end of the [README](README.md): English only, short question-style comments get only partial relevance, and quality isn't judged beyond "makes a statement".
+- The thresholds (relevance gate 0.1 / 0.5, 0.6 hybrid weight, 6-token lexical threshold, 4-word specificity minimum) were tuned on this corpus and haven't been verified on Gemini embeddings.
+- Nature and outdoor text near the "park" topic can partly pass the relevance gate: the hiking comment above scored 0.21.
+- The pipeline is English-only; see the README's limitations section.

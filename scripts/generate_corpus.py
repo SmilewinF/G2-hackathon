@@ -1,12 +1,12 @@
 """Generate a synthetic corpus of submissions with Gemini.
 
-    GEMINI_API_KEY=... python scripts/generate_corpus.py [--n 50] [--out data/corpus.generated.json] [--force]
+    GEMINI_API_KEY=... python scripts/generate_corpus.py [--n 50] [--model MODEL] [--out data/corpus.generated.json] [--force]
 
 Real comment sections are clustered: most people repeat a handful of obvious takes, a few say
 something new. The prompt asks for that shape explicitly, because a corpus of 50 all-unique
 comments would make "novel" meaningless. Writes to a separate file by default so the committed
 corpus (which the tests are calibrated against) is not overwritten, and refuses to replace an
-existing output file unless --force is given.
+existing output file unless --force is given. --model defaults to $GEMINI_MODEL, else gemini-2.5-flash.
 
 Exit codes: 0 ok, 1 generation failed (API, response or validation), 2 bad usage/configuration.
 """
@@ -23,8 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from novelty.data import DATA_DIR, load_fixed_content  # noqa: E402
-from novelty.embeddings import is_transient_error  # noqa: E402
+from novelty.data import DATA_DIR, load_fixed_content, write_json_atomic  # noqa: E402
+from novelty.embeddings import gemini_api_key, is_transient_error  # noqa: E402
 from novelty.errors import NoveltyError, ValidationError  # noqa: E402
 from novelty.logging_setup import configure_logging  # noqa: E402
 from novelty.models import Stance, Submission  # noqa: E402
@@ -107,11 +107,9 @@ def _rows(text: str) -> list[dict]:
 
 
 def _write(path: Path, rows: list[dict]) -> None:
-    tmp = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        write_json_atomic(path, rows)
     except OSError as e:
         raise GenerationError(f"could not write {path}: {e}") from e
 
@@ -137,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         log.error('google-genai is not installed; run: pip install -e ".[gemini]"')
         return 2
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = gemini_api_key()
     if not api_key:
         log.error("set GEMINI_API_KEY (free key: https://aistudio.google.com/)")
         return 2

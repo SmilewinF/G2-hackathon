@@ -2,28 +2,26 @@
 harmless degradation), and every scored input leaves an input line and a result line."""
 
 import importlib.util
-import re
 import json
 import logging
+import re
 import sqlite3
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 import novelty.data as data
-from helpers import HashEmbedder
+from helpers import TOY_ANCHORS, HashEmbedder, request_json, toy_corpus
 from novelty import embeddings
 from novelty.__main__ import main as cli_main
-from novelty.embeddings import CachedEmbedder, GeminiEmbedder, default_embedder, is_transient_error
+from novelty.embeddings import CachedEmbedder, GeminiEmbedder, default_embedder, gemini_api_key, is_transient_error
 from novelty.errors import (CalibrationError, DataError, EmbeddingError, NoveltyError, ScoringError,
                             ValidationError)
 from novelty.logging_setup import configure_logging, preview, request_id
 from novelty.models import Submission
-from novelty.scorer import NoveltyScorer, default_signals
-from novelty.server import App, _loopback_servers, make_handler
+from novelty.scorer import NoveltyScorer, ScorerConfig, default_signals
+from novelty.server import _loopback_servers, make_handler
 from novelty.signals import Kind, Signal, SignalResult
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -182,6 +180,26 @@ def test_cache_counts_hits_and_misses(tmp_path):
     assert (emb.misses, emb.hits) == (3, 1)
 
 
+def test_build_scorer_keeps_the_given_embedder_even_with_an_empty_cache(tmp_path):
+    emb = CachedEmbedder(HashEmbedder(), tmp_path)  # empty cache: len(emb) == 0, so emb is falsy
+    assert data.build_scorer(emb).embedder is emb
+
+
+def test_write_json_atomic_writes_indented_json_and_no_temp_file(tmp_path):
+    out = tmp_path / "out.json"
+    data.write_json_atomic(out, [{"a": 1}])
+    assert out.read_text(encoding="utf-8") == json.dumps([{"a": 1}], indent=2) + "\n"
+    assert not (tmp_path / "out.json.tmp").exists()
+
+
+def test_gemini_api_key_prefers_gemini_then_google(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "g")
+    assert gemini_api_key() == "g"
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert gemini_api_key() == "k"
+
+
 def test_unknown_embedder_choice_is_rejected(monkeypatch):
     monkeypatch.setenv("NOVELTY_EMBEDDER", "bogus")
     with pytest.raises(EmbeddingError, match="must be 'local' or 'gemini'"):
@@ -231,15 +249,6 @@ def test_gemini_does_not_retry_permanent_errors(monkeypatch):
 # ---------------------------------------------------------------- scorer
 
 
-ANCHORS = ["the football match was great and the striker scored twice in the final minutes"]
-
-
-def _toy_corpus():
-    return [Submission(headline=f"Garage idea {i}", stance="support" if i % 4 else "oppose",
-                       body=f"The council plan for the garage and the park is idea number {i} for the downtown area.")
-            for i in range(12)]
-
-
 class _Exploding(Signal):
     name, kind = "exploding", Kind.MODIFIER
 
@@ -266,10 +275,7 @@ class _FlakyUpdate(Signal):
 
 
 def _toy_scorer(extra):
-    from novelty.data import load_fixed_content
-    from novelty.scorer import ScorerConfig
-
-    return NoveltyScorer(load_fixed_content(), _toy_corpus(), HashEmbedder(), ANCHORS,
+    return NoveltyScorer(data.load_fixed_content(), toy_corpus(), HashEmbedder(), TOY_ANCHORS,
                          signals=[*default_signals(ScorerConfig()), extra])
 
 
@@ -340,70 +346,42 @@ def test_preview_flattens_and_truncates():
 # ---------------------------------------------------------------- server
 
 
-@pytest.fixture
-def app(base_scorer, tmp_path):
-    return App(base_scorer.fork, tmp_path / "user_submissions.json")
-
-
-@pytest.fixture
-def served(app):
-    from http.server import ThreadingHTTPServer
-    import threading
-
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
-    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
-    yield app, f"http://127.0.0.1:{httpd.server_port}"
-    httpd.shutdown()
-
-
 def _request(url, payload=None):
-    body = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp.status, json.load(resp)
-    except urllib.error.HTTPError as e:
-        return e.code, json.load(e)
+    return request_json(url, None if payload is None else json.dumps(payload).encode())
 
 
 GOOD = {"headline": "Solar canopies", "body": "Solar canopies over the outer shuttle lot would shade cars.", "stance": "support"}
 
 
-def test_embedding_outage_is_a_503_with_request_id(served, monkeypatch):
-    app, url = served
-
+def test_embedding_outage_is_a_503_with_request_id(app, base_url, monkeypatch):
     def down(sub):
         raise EmbeddingError("backend unreachable")
 
     monkeypatch.setattr(app.scorer, "score", down)
-    status, payload = _request(url + "/api/score", GOOD)
+    status, payload = _request(base_url + "/api/score", GOOD)
     assert status == 503 and "backend unreachable" in payload["error"] and payload["request_id"].startswith("r")
 
 
-def test_unexpected_error_is_a_500_that_points_to_the_log(served, monkeypatch):
-    app, url = served
+def test_unexpected_error_is_a_500_that_points_to_the_log(app, base_url, monkeypatch):
     monkeypatch.setattr(app.scorer, "score", lambda sub: {}["missing"])
-    status, payload = _request(url + "/api/score", GOOD)
+    status, payload = _request(base_url + "/api/score", GOOD)
     assert status == 500 and "see server log" in payload["error"] and payload["request_id"] in payload["error"]
 
 
-def test_failed_save_still_answers_and_says_so(served):
-    app, url = served
+def test_failed_save_still_answers_and_says_so(app, base_url):
     app.user_file = app.user_file.parent / "no_such_dir" / "subs.json"
-    status, payload = _request(url + "/api/score", {**GOOD, "commit": True})
+    status, payload = _request(base_url + "/api/score", {**GOOD, "commit": True})
     assert status == 200 and payload["saved"] is False and len(app.records) == 1
 
 
-def test_unknown_route_and_query_strings(served):
-    _, url = served
-    status, payload = _request(url + "/nope")
+def test_unknown_route_and_query_strings(base_url):
+    status, payload = _request(base_url + "/nope")
     assert status == 404 and payload["request_id"]
-    assert _request(url + "/api/context?x=1")[0] == 200
+    assert _request(base_url + "/api/context?x=1")[0] == 200
 
 
-def test_port_in_use_is_a_clear_error(served):
-    _, url = served
-    port = int(url.rsplit(":", 1)[1])
+def test_port_in_use_is_a_clear_error(base_url):
+    port = int(base_url.rsplit(":", 1)[1])
     with pytest.raises(NoveltyError, match=f"cannot listen on 127.0.0.1:{port}"):
         _loopback_servers("127.0.0.1", port, make_handler(None))
 

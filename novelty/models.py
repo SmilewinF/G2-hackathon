@@ -43,6 +43,9 @@ class FixedContent:
 
     @property
     def embedding_text(self) -> str:
+        """Title and text as one document (same layout as ``Submission.text``). The index embeds the
+        *prepared* article (``TextPreparer.prepare(title, text)``); this raw form is the article
+        vocabulary that spelling correction prefers."""
         return f"{self.title}\n\n{self.text}"
 
 
@@ -104,7 +107,7 @@ class ScoreBreakdown:
     score: float  # final reward in [0, 1] = novelty * relevance_gate
     novelty: float  # [0, 1] = min(novelty signals) * product(modifier signals)
     semantic_novelty: float  # [0, 1], whole-text novelty vs. the corpus (robust z -> normal CDF)
-    clause_novelty: float | None  # [0, 1], most novel relevant clause; None for single-clause text
+    clause_novelty: float | None  # [0, 1], most novel relevant clause; None if exactly one clause is substantive
     raw_novelty: float  # uncalibrated whole-text distance to nearest neighbours
     stance_rarity: float  # [0, 1], 0 = most common stance in the corpus
     relevance: float  # [0, 1], margin / typical on-topic margin

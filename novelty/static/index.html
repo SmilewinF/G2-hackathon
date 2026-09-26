@@ -171,21 +171,27 @@ const SIGNAL_NAMES = {
   stance: 'Stance rarity', relevance: 'Relevance gate',
 };
 const $ = (id) => document.getElementById(id);
+const BODY_MIN_CHARS = 20; // models.BODY_MIN_CHARS
+const NOVEL_MIN = 0.6; // mirrors tests/helpers.py
+const NOT_NOVEL_MAX = 0.25; // mirrors tests/helpers.py
 const state = { corpusSize: 0, userCount: 0 };
+const RESULT_HEADING = '<p class="eyebrow" id="result-title">Result</p>';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 const fmt = (x) => (typeof x === 'number' ? x.toFixed(2) : '–');
 
-function updateMeta() {
+function showCounts(payload) {
+  state.corpusSize = payload.corpus_size;
+  state.userCount = payload.user_count;
   const added = state.userCount ? `, ${state.userCount} added by you` : '';
   $('meta').textContent = `${state.corpusSize} comments in the corpus${added}`;
 }
 
 function updateCounts() {
-  $('headline-count').textContent = `${$('headline').value.length} / 120`;
-  $('body-count').textContent = `${$('body').value.length} / 2000`;
+  $('headline-count').textContent = `${$('headline').value.length} / ${$('headline').maxLength}`;
+  $('body-count').textContent = `${$('body').value.length} / ${$('body').maxLength}`;
 }
 
 function selectedStance() {
@@ -207,9 +213,7 @@ async function init() {
   const res = await fetch('/api/context');
   const ctx = await res.json();
   if (!res.ok) throw new Error(ctx.error || 'Could not load the page data');
-  state.corpusSize = ctx.corpus_size;
-  state.userCount = ctx.user_count;
-  updateMeta();
+  showCounts(ctx);
   $('article-title').textContent = ctx.fixed.title;
   $('article-text').textContent = ctx.fixed.text;
   $('model').textContent = `Embedding model: ${ctx.embedder}`;
@@ -236,7 +240,7 @@ async function init() {
 
 function clientError() {
   if (!$('headline').value.trim()) return 'Add a headline.';
-  if ($('body').value.trim().length < 20) return 'The comment needs at least 20 characters.';
+  if ($('body').value.trim().length < BODY_MIN_CHARS) return `The comment needs at least ${BODY_MIN_CHARS} characters.`;
   if (!selectedStance()) return 'Choose a stance.';
   return null;
 }
@@ -256,9 +260,7 @@ async function submit(commit) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error + (data.request_id ? ` (request ${data.request_id})` : ''));
-    state.corpusSize = data.corpus_size;
-    state.userCount = data.user_count;
-    updateMeta();
+    showCounts(data);
     render(data.result, commit, data.saved);
     if (window.matchMedia('(max-width: 959px)').matches) $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
@@ -276,9 +278,9 @@ function verdict(r) {
   if (has('not in a supported language') || has('no assessable English')) return ['v-neutral', 'Not assessable', 'Only English text can be scored.'];
   if (r.signals.quality === 0) return ['v-neutral', 'No clear statement', 'It does not make a point that can be compared with other comments.'];
   if (r.relevance_gate === 0) return ['v-bad', 'Off-topic', 'It is not about the article, so it earns nothing however new it is.'];
-  if (r.score >= 0.6) return ['v-good', 'New and relevant', 'It says something the existing comments have not, and it stays on topic.'];
-  if ((r.signals.specificity ?? 1) < 1 && r.score < 0.6) return ['v-warn', 'Too general', 'It does not make a specific enough point to count as new.'];
-  if (r.score >= 0.25) return ['v-warn', 'Partly new', 'It adds a little beyond what has already been said.'];
+  if (r.score >= NOVEL_MIN) return ['v-good', 'New and relevant', 'It says something the existing comments have not, and it stays on topic.'];
+  if ((r.signals.specificity ?? 1) < 1) return ['v-warn', 'Too general', 'It does not make a specific enough point to count as new.'];
+  if (r.score >= NOT_NOVEL_MAX) return ['v-warn', 'Partly new', 'It adds a little beyond what has already been said.'];
   return ['v-neutral', 'Already said', 'Existing comments already make this point.'];
 }
 
@@ -306,7 +308,7 @@ function render(r, committed, saved) {
   const reasons = r.reasons.map(x => `<li>${esc(x)}</li>`).join('');
 
   $('result').innerHTML = `
-    <p class="eyebrow" id="result-title">Result</p>
+    ${RESULT_HEADING}
     <div class="score-row">
       <div class="score">${fmt(r.score)}<small> / 1.00</small></div>
       <span class="badge ${cls}">${esc(title)}</span>
@@ -340,10 +342,8 @@ $('reset').addEventListener('click', async () => {
   const res = await fetch('/api/reset', { method: 'POST' });
   const data = await res.json();
   if (!res.ok) { alert(`Reset failed: ${data.error}`); return; }
-  state.corpusSize = data.corpus_size;
-  state.userCount = data.user_count;
-  updateMeta();
-  $('result').innerHTML = '<p class="eyebrow">Result</p><p class="empty">Your submissions were removed.</p>';
+  showCounts(data);
+  $('result').innerHTML = `${RESULT_HEADING}<p class="empty">Your submissions were removed.</p>`;
 });
 
 init().catch(err => {

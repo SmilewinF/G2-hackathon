@@ -17,7 +17,7 @@ NOVELTY_TEST_CORPUS=seed .venv/Scripts/python -m pytest   # seed corpus only (re
 .venv/Scripts/python -m novelty score --headline ... --body ... --stance support [--json]
 ```
 
-The first run downloads the fastembed ONNX model into `.cache/fastembed`. Embeddings are cached in `.cache/embeddings/<model-hash>.sqlite`, keyed by a hash of the *prepared* text. Delete that folder only if you change an embedder's output for the same text.
+The first run downloads the fastembed ONNX model into `.cache/fastembed`. Embeddings are cached in `.cache/embeddings/<model-hash>.sqlite`, keyed by a hash of the *prepared* text. Delete that folder only if you change an embedder's output for the same text. `NOVELTY_CACHE_DIR` relocates the whole cache (model + embeddings); point a worktree at the main checkout's `.cache` to skip the download.
 
 ## Architecture
 
@@ -35,15 +35,15 @@ Pipeline: `Submission` (normalised on construction) → `TextPreparer` → `Refe
 - **`scorer.py`**: orchestration. `submit()` adds a submission only if it's relevant, non-duplicate and substantive. `add_many()` recalibrates once per batch. `fork()` deep-copies the state while sharing the embedder and preparer, which tests and the server's Reset rely on.
 - **Invariant:** incremental `update()` must equal a full `fit()` on the same index. `test_incremental_calibration_matches_a_full_refit` guards this, so extend it when you add a stateful signal.
 
-Embedding backends are in `novelty/embeddings.py`. `NOVELTY_EMBEDDER=local|gemini` selects one; the default is gemini if `GEMINI_API_KEY` is set, otherwise local bge-small, lazy-loaded. Tests force local through `tests/conftest.py`, and `NOVELTY_TEST_EMBEDDER=gemini` overrides that.
+Embedding backends are in `novelty/embeddings.py`. `NOVELTY_EMBEDDER=local|gemini` selects one; the default is gemini if `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) is set, otherwise local bge-small, lazy-loaded. Tests force local through `tests/conftest.py`, and `NOVELTY_TEST_EMBEDDER=gemini` overrides that.
 
 The web UI (`novelty/server.py`) logs every committed attempt to `data/user_submissions.json` (gitignored) and replays the admitted ones with `add_many` on startup. Never write them into `corpus.json`: the tests depend on that seed set. The server also listens on `::1`, because Windows resolves `localhost` to IPv6 first and a refused connect cost 200 ms per request.
 
 ## Data and test conventions
 
 - `data/probes.json` holds the labelled test inputs, grouped as `novel_relevant`, `duplicates` and `off_topic`. The behaviour tests index into these groups by position, so add new probes at the end of a group. Novel and off-topic probes must not appear in `corpus.json` or `off_topic_anchors.json` (`test_shape.py` enforces this).
-- Test thresholds: novel ≥ 0.6, non-novel ≤ 0.25, off-topic ≤ 0.01. Some tests refer to corpus ids directly (`c01`, `c11`, `c27`, and the crowded/one-off lists), so editing `corpus.json` can break them.
-- `test_adversarial.py` and `test_edge_cases.py` pin behaviours that were once broken; each comment says what the case scored before its fix. Don't loosen them to make a change pass.
+- Test thresholds: novel ≥ 0.6, non-novel ≤ 0.25, off-topic ≤ 0.01. Some tests refer to corpus ids directly (`c01`, `c04`, `c20`, `c27`, and the crowded/one-off lists), and the `d_copy` / `d_stance_flip` probes are copies of `c01` / `c11`, so editing `corpus.json` can break them.
+- `test_adversarial.py` and `test_edge_cases.py` pin behaviours that were once broken; where a case records a pre-fix score (a `# was:` comment or a docstring note), that is what it scored before the fix. Don't loosen them to make a change pass.
 - The `scorer` fixture is a fork of one session-scoped build. Use `base_scorer.fork` wherever a test needs a scorer factory.
 - Tests use the whole corpus. Use `helpers.assert_novel` for "this should be rewarded" assertions: it treats probes already submitted through the web UI correctly. Use the `corpus_size` fixture, never a literal 50. Thresholds and the toy embedder live in `tests/helpers.py`.
 - Known weak spots: short question-style comments (`c36`) get only partial relevance, and code-mixed sentences earn nothing. See the README limitations section before "fixing" the gate thresholds.

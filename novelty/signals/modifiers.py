@@ -46,13 +46,16 @@ class DuplicateCheck(Signal):
 
 
 class ContentQuality(Signal):
-    """No reward for text that makes no statement: keyword lists, word repetition, emoji walls."""
+    """No reward for text that makes no statement or cannot be assessed: keyword lists, word
+    repetition, emoji walls, text with no substantive English clause. Foreign clauses next to
+    English content are only noted in the reasons, not penalised."""
 
     name = "quality"
     kind = Kind.MODIFIER
 
-    def __init__(self, min_distinct_share: float = 0.35) -> None:
+    def __init__(self, min_distinct_share: float = 0.35, min_repetition_words: int = 12) -> None:
         self.min_distinct_share = min_distinct_share
+        self.min_repetition_words = min_repetition_words  # shorter bodies are too short to call repetitive
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         flags, notes = [], []
@@ -64,7 +67,7 @@ class ContentQuality(Signal):
             flags.append("no substantive content (no sentence-like clause in the body)")
         elif any(a.foreign):
             notes.append(f"{sum(a.foreign)} of {len(a.foreign)} clauses are not in English and were not scored")
-        if len(words(a.submission.body)) >= 12 and distinct_share(a.submission.body) < self.min_distinct_share:
+        if len(words(a.submission.body)) >= self.min_repetition_words and distinct_share(a.submission.body) < self.min_distinct_share:
             flags.append("repetitive text")
         return SignalResult(0.0 if flags else 1.0, flags + notes, {"flags": flags})
 
@@ -104,10 +107,13 @@ class Specificity(Signal):
 
 
 class StanceRarity(Signal):
-    """Small bonus for a less common stance. Multiplicative, so it can never rescue a copy."""
+    """Small relative bonus for a less common stance: value = 1 − weight × (1 − rarity), so the
+    most common stance is discounted by ``weight`` (10 % by default) and rarer ones by less.
+    Multiplicative and never above 1, so it can never rescue a copy."""
 
     name = "stance"
     kind = Kind.MODIFIER
+    p: dict[Stance, float]  # Laplace-smoothed stance frequencies, set by fit()
 
     def __init__(self, weight: float = 0.1) -> None:
         self.weight = weight

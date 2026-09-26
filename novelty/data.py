@@ -1,14 +1,21 @@
-"""Loaders for the bundled fixed content, corpus, calibration anchors, test probes and the web
-UI's saved user submissions.
+"""Loaders for the bundled fixed content, corpus, calibration anchors, test probes and web UI
+examples, and for the web UI's saved user submissions, plus ``build_scorer``, which assembles a
+scorer from them.
 
-Every loader raises ``DataError`` naming the file (and the item, for lists) when a file is
-missing, is not valid JSON, or has the wrong shape, instead of a bare ``KeyError`` deep inside.
+The bundled-file loaders raise ``DataError`` naming the file (and the item, for lists) when a
+file is missing, is not valid JSON, or has the wrong shape, instead of a bare ``KeyError`` deep
+inside. ``load_user_submissions`` is lenient instead: a missing file means no submissions, and
+records that fail validation or repeat an id are skipped with a warning; only an unreadable or
+non-list file raises.
+
+``write_json_atomic`` is the matching writer that the server and the corpus generator share.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +98,7 @@ def load_probes() -> dict[str, list[dict]]:
 
 
 EXAMPLE_EXPECTATIONS = ("novel", "common", "off_topic")
+EXAMPLES_PER_STANCE = 2
 
 
 def load_examples() -> dict[str, list[dict]]:
@@ -103,13 +111,14 @@ def load_examples() -> dict[str, list[dict]]:
     examples = {}
     for stance in stances:  # stance order, not file order
         items = raw[stance]
-        if not isinstance(items, list) or len(items) != 2:
-            raise DataError(f"examples.json[{stance}] must be a list of exactly 2 examples")
+        if not isinstance(items, list) or len(items) != EXAMPLES_PER_STANCE:
+            raise DataError(f"examples.json[{stance}] must be a list of exactly {EXAMPLES_PER_STANCE} examples")
         for i, item in enumerate(items):
             if not isinstance(item, dict) or item.get("expect") not in EXAMPLE_EXPECTATIONS or not item.get("label"):
                 raise DataError(f"examples.json[{stance}] item {i} needs a label and expect in {EXAMPLE_EXPECTATIONS}")
-        _submissions([{**item, "stance": stance} for item in items], f"examples.json[{stance}]")
-        examples[stance] = [{**item, "stance": stance} for item in items]
+        with_stance = [{**item, "stance": stance} for item in items]
+        _submissions(with_stance, f"examples.json[{stance}]")  # validate every example
+        examples[stance] = with_stance
     return examples
 
 
@@ -143,6 +152,15 @@ def load_user_submissions(path: Path = USER_FILE, admitted_only: bool = True) ->
     return subs
 
 
+def write_json_atomic(path: Path, data: Any) -> None:
+    """Write ``data`` as indented JSON (plus a trailing newline) via ``<name>.tmp`` and
+    ``os.replace``, so a crash mid-write cannot leave a truncated file. ``OSError`` propagates;
+    the caller decides whether a failed write is fatal."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def build_scorer(
     embedder: Embedder | None = None,
     config: ScorerConfig = ScorerConfig(),
@@ -160,7 +178,7 @@ def build_scorer(
     return NoveltyScorer(
         fixed=load_fixed_content(),
         corpus=corpus,
-        embedder=embedder or default_embedder(),
+        embedder=embedder if embedder is not None else default_embedder(),
         off_topic_anchors=load_off_topic_anchors(),
         config=config,
     )

@@ -94,6 +94,11 @@ def is_transient_error(e: Exception) -> bool:
     return code in (408, 429, 500, 502, 503, 504) or isinstance(e, (TimeoutError, ConnectionError))
 
 
+def gemini_api_key() -> str | None:
+    """The Gemini key from ``GEMINI_API_KEY``, falling back to ``GOOGLE_API_KEY``."""
+    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+
 class GeminiEmbedder:
     BATCH = 100
     ATTEMPTS = 3
@@ -104,7 +109,7 @@ class GeminiEmbedder:
         except ImportError as e:
             raise EmbeddingError(f"google-genai is not installed ({e}); run: pip install -e \".[gemini]\"") from e
 
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        api_key = gemini_api_key()
         if not api_key:
             raise EmbeddingError("GEMINI_API_KEY is not set (free key: https://aistudio.google.com/)")
         self.name = f"gemini:{model}:{dimensions}"
@@ -269,11 +274,10 @@ def _validated(vecs: np.ndarray, n: int, name: str) -> np.ndarray:
 
 
 def default_embedder() -> Embedder:
-    """``NOVELTY_EMBEDDER`` = local | gemini. Defaults to gemini when a key is present."""
+    """``NOVELTY_EMBEDDER`` = local | gemini, wrapped in a ``CachedEmbedder``. Defaults to gemini when ``gemini_api_key()`` finds a key."""
     choice = os.environ.get("NOVELTY_EMBEDDER")
     if choice is None:
-        has_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        choice = "gemini" if has_key else "local"
+        choice = "gemini" if gemini_api_key() else "local"
     if choice not in ("local", "gemini"):
         raise EmbeddingError(f"NOVELTY_EMBEDDER must be 'local' or 'gemini', got {choice!r}")
     inner: Embedder = GeminiEmbedder() if choice == "gemini" else LocalEmbedder()

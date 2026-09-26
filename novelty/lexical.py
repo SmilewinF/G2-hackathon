@@ -30,8 +30,14 @@ def count(text: str) -> Counter[str]:
     return Counter(tokens(text))
 
 
+def _smoothed_idf(n: int, df: int) -> float:
+    """Add-one smoothed IDF: log((n + 1) / (df + 1)) + 1."""
+    return math.log((n + 1) / (df + 1)) + 1.0
+
+
 class TfidfModel:
-    """Document frequencies plus an IDF snapshot. Sublinear TF, smoothed IDF, unit-norm vectors."""
+    """Document frequencies plus an IDF snapshot. Sublinear TF, smoothed IDF, vectors normalised
+    over all of a text's terms (see ``vector``)."""
 
     def __init__(self, refit_growth: float = 0.1) -> None:
         self.refit_growth = refit_growth
@@ -50,8 +56,7 @@ class TfidfModel:
         return self.n >= self._refit_at
 
     def refit(self) -> None:
-        n = self.n
-        self._idf = {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in self.df.items()}
+        self._idf = {t: _smoothed_idf(self.n, c) for t, c in self.df.items()}
         self._refit_at = max(self.n + 1, math.ceil(self.n * (1.0 + self.refit_growth)))
         self.version += 1
 
@@ -60,11 +65,12 @@ class TfidfModel:
         if cached is not None:
             return cached
         # Term first seen after the last refit (or never): compute from the live counts.
-        return math.log((self.n + 1) / (self.df.get(term, 0) + 1)) + 1.0
+        return _smoothed_idf(self.n, self.df.get(term, 0))
 
     def vector(self, doc: Counter[str]) -> SparseVec:
-        """Unit vector. Terms the corpus has never used still count toward the norm, so a text
-        full of unseen words is correctly far from everything."""
+        """Sublinear TF x IDF, divided by the norm over *all* of ``doc``'s terms; terms the corpus
+        has never used are then dropped. They still count toward the norm, so a text full of unseen
+        words is correctly far from everything (and its vector is shorter than unit length)."""
         weights = {t: (1.0 + math.log(c)) * self.idf(t) for t, c in doc.items()}
         norm = math.sqrt(sum(w * w for w in weights.values()))
         if not norm:
@@ -73,7 +79,7 @@ class TfidfModel:
 
 
 class SparseVectors:
-    """Append-only inverted index over sparse unit vectors."""
+    """Append-only inverted index over sparse TF-IDF vectors (as built by ``TfidfModel.vector``)."""
 
     def __init__(self) -> None:
         self._postings: dict[str, tuple[list[int], list[float]]] = {}
@@ -108,7 +114,8 @@ class SparseVectors:
         return arr
 
     def dot_all(self, query: SparseVec) -> np.ndarray:
-        """Cosine of ``query`` with every stored vector (both unit-norm)."""
+        """Dot product of ``query`` with every stored vector: their TF-IDF cosine, with unseen
+        terms counted in each vector's norm (see ``TfidfModel.vector``)."""
         out = np.zeros(len(self.vectors))
         for t, qw in query.items():
             p = self._posting(t)
