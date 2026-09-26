@@ -19,6 +19,7 @@ The brief allows a coding agent but asks for an explanation of how it was prompt
 7. *"imagine you are a senior AI engineer who wants to break this code … keep the entire code base modular."* This led to the adversarial pass and the signal-based architecture (see below).
 8. *"test the case where half the texts are in english and half in a different language … if the user input text is only a few words (<10) or … >100 … bad english … the reward must not be too low as the context is still relevant."* This led to the input edge-case pass.
 9. *"focus on performance … an optimal performance project where no unnecessary time or effort is used."* This led to the measured performance pass.
+10. *(Author: add the exact prompt.)* A request for error handling and logging across the code, which also led to running the tests against the whole corpus.
 
 ## What the agent did, and where evidence changed the plan
 
@@ -72,6 +73,17 @@ The agent profiled first: startup stages, per-request latency on new versus cach
 4. The test suite spent 8 of its 9.6 s in `httpd.shutdown()` poll waits. → short poll interval, and forking one pre-built scorer.
 
 ONNX thread count and texts-per-request were measured too, and deliberately left alone because there was no gain. The README's Performance table has the before and after numbers.
+
+### Error handling, logging and whole-corpus tests (prompt 10)
+
+| Decision | Why |
+|---|---|
+| One `NoveltyError` hierarchy; each class also subclasses `ValueError` / `RuntimeError` | existing `except ValueError` code keeps working |
+| The embedding cache, spelling correction and saving the submissions log degrade with a logged warning or error | losing an optimisation must not fail a request |
+| One INFO input line and one INFO result line per scored input; DEBUG adds the full calculation | readable at INFO, and every score is still explainable |
+| A request id on every server log line and error response | ties a user-visible error to its log lines |
+| The Windows server binds with `SO_EXCLUSIVEADDRUSE` | `SO_REUSEADDR` let a second server silently share the port |
+| Tests run on seed + admitted web-UI submissions by default (`NOVELTY_TEST_CORPUS=seed` pins the seed); probes already submitted are asserted as copies, or skipped naming the covering entry | the suite checks the corpus the web UI actually scores against |
 
 ## Agent-generated content
 
