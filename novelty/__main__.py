@@ -57,13 +57,25 @@ def _cmd_score(args: argparse.Namespace) -> None:
         print(f"  - {reason}")
 
 
+def _cmd_eval(args: argparse.Namespace) -> None:
+    from .embeddings import default_embedder
+    from .evaluation import evaluate, format_report, load_eval_set
+
+    embedder = default_embedder()
+    report = evaluate(lambda: build_scorer(embedder), load_eval_set(split=args.split), args.split)
+    if args.json:
+        print(json.dumps(dataclasses.asdict(report), indent=2))
+    else:
+        print(format_report(report, failures=args.failures))
+
+
 def _cmd_serve(args: argparse.Namespace) -> None:
     from .server import serve
 
     serve(port=args.port)
 
 
-_DEFAULT_LEVEL = {"demo": "WARNING", "corpus": "WARNING", "score": "INFO", "serve": "INFO"}
+_DEFAULT_LEVEL = {"demo": "WARNING", "corpus": "WARNING", "eval": "WARNING", "score": "INFO", "serve": "INFO"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--stance", required=True, choices=[s.value for s in Stance])
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=_cmd_score)
+    p = sub.add_parser("eval", help="held-out evaluation (data/eval/heldout.json)")
+    p.add_argument("--split", choices=["dev", "test", "all"], default="test")
+    p.add_argument("--failures", type=int, default=10, help="how many worst failures to list")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=_cmd_eval)
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, default=8000)
     p.set_defaults(fn=_cmd_serve)
