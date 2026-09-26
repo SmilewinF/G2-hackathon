@@ -112,7 +112,7 @@ Relevance is judged on the substantive body only, so stuffing the headline or ap
 - The panel's 60 red-team items are included too.
 - A blind second annotator re-labelled every item without seeing the original label, and they agreed on all 200.
 
-**How it was used:** the items are split into **dev** (70), the only data any setting was tuned on, and **test** (130), which was evaluated once. The table below is test.
+**How it was used:** the items are split into **dev** (70), the only data any setting was tuned on, and **test** (130), which no setting was tuned on. All 60 red-team items are in test, and they include the failures that prompted the learned gate (bus cuts, library hours), so the off-topic figures are somewhat flattered. The table below is test.
 
 | Test split (130 items) | Previous gate | **Learned gate** |
 |---|---:|---:|
