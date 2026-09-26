@@ -8,7 +8,8 @@ Hackathon solution (G2, "Rewarding novelty in submissions"): score a user submis
 
 ```bash
 .venv/Scripts/python -m pip install -e ".[dev,gemini]"   # venv lives in .venv (Windows layout)
-.venv/Scripts/python -m pytest                            # full suite, ~2 s
+.venv/Scripts/python -m pytest                            # full suite, ~2 s (whole corpus: seed + admitted web-UI submissions)
+NOVELTY_TEST_CORPUS=seed .venv/Scripts/python -m pytest   # seed corpus only (reproducible)
 .venv/Scripts/python -m pytest tests/test_edge_cases.py -k typo
 .venv/Scripts/python -m novelty serve                     # web UI at http://127.0.0.1:8000 (stdlib only)
 .venv/Scripts/python -m novelty demo                      # score table for data/probes.json — check after any scoring change
@@ -30,6 +31,7 @@ Pipeline: `Submission` (normalised on construction) → `TextPreparer` → `Refe
   - `DuplicateCheck`: shingle containment, but only against the 25 most similar entries plus the article.
   - `ContentQuality`, `Specificity`, `StanceRarity`.
   - `TopicMargin`: contrastive margin of the *substantive body* against the generic-chatter centroid (`data/off_topic_anchors.json`). A margin ≤ 0 means off-topic.
+- **Errors and logging**: raise the specific `novelty.errors` class (each is also a `ValueError` or `RuntimeError`). Library modules only call `logging.getLogger(__name__)`; handlers are configured by entry points through `logging_setup.configure_logging`. The scorer's per-request INFO lines are the contract the README documents, so keep them to one input line and one result line.
 - **`scorer.py`**: orchestration. `submit()` adds a submission only if it's relevant, non-duplicate and substantive. `add_many()` recalibrates once per batch. `fork()` deep-copies the state while sharing the embedder and preparer, which tests and the server's Reset rely on.
 - **Invariant:** incremental `update()` must equal a full `fit()` on the same index. `test_incremental_calibration_matches_a_full_refit` guards this, so extend it when you add a stateful signal.
 
@@ -43,6 +45,7 @@ The web UI (`novelty/server.py`) logs every committed attempt to `data/user_subm
 - Test thresholds: novel ≥ 0.6, non-novel ≤ 0.25, off-topic ≤ 0.01. Some tests refer to corpus ids directly (`c01`, `c11`, `c27`, and the crowded/one-off lists), so editing `corpus.json` can break them.
 - `test_adversarial.py` and `test_edge_cases.py` pin behaviours that were once broken; each comment says what the case scored before its fix. Don't loosen them to make a change pass.
 - The `scorer` fixture is a fork of one session-scoped build. Use `base_scorer.fork` wherever a test needs a scorer factory.
+- Tests use the whole corpus. Use `helpers.assert_novel` for "this should be rewarded" assertions: it treats probes already submitted through the web UI correctly. Use the `corpus_size` fixture, never a literal 50. Thresholds and the toy embedder live in `tests/helpers.py`.
 - Known weak spots: short question-style comments (`c36`) get only partial relevance, and code-mixed sentences earn nothing. See the README limitations section before "fixing" the gate thresholds.
 
 ## Workflow

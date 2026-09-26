@@ -145,7 +145,7 @@ The web server is hardened as well:
 ## 5. Automated tests
 
 ```
-pytest            # 120 tests, ~2 s after the first model download
+pytest            # 158 tests, ~2 s after the first model download
 ```
 
 | Requirement from the brief | Test ([tests/test_behavior.py](tests/test_behavior.py)) |
@@ -166,6 +166,36 @@ The other test files cover the rest:
 
 Tests are pinned to the local model so they're deterministic and need no key. `NOVELTY_TEST_EMBEDDER=gemini pytest` runs the same behavioural suite on Gemini.
 
+### Test corpus
+
+The tests run against the **whole corpus** by default: the 50 seed comments plus every admitted submission the web UI saved to `data/user_submissions.json`. The pytest header says which corpus was used.
+
+Once a probe has been submitted through the UI, it's no longer novel, so the tests adjust:
+- **Exact copy:** a test that expects a probe to be novel asserts instead that it's caught as a copy.
+- **Same idea, different wording:** if a web-UI submission already covers the idea, the test is skipped, and the skip message names that submission.
+
+`NOVELTY_TEST_CORPUS=seed pytest` pins the suite to the seed corpus for reproducible runs.
+
+## Logging and errors
+
+Every scored input leaves two INFO lines: the input, and the result with its calculation and timing. With `-v` (DEBUG) you also get every signal, the nearest neighbours and the spelling corrections:
+
+```
+INFO    [r000007] novelty.scorer: submit input: id=u03 stance=support words=19 headline="Design the park to soak up floods"
+INFO    [r000007] novelty.scorer: submit result: id=u03 score=0.822 = novelty 0.822 x gate 1.00 | whole 0.91 clause 0.96 | relevance 1.00 margin +0.171 | added to corpus | 29 ms (embed 26 ms, 4 new)
+DEBUG   [r000007] novelty.scorer: calculation: whole_text=0.914 clause_coverage=0.957 duplicate=1.000 quality=1.000 specificity=1.000 stance=0.900 relevance=1.000 | nearest c07:0.50 c08:0.48 ... | corrections: none
+```
+
+**Configuration:** `NOVELTY_LOG_LEVEL` sets the level, `NOVELTY_LOG_FILE` also writes to a file, and on the CLI `--log-level` or `-v` overrides both. The `[r000007]` request id ties together the lines from one web request, and it's returned in every error response.
+
+**Errors:** every error is a `NoveltyError` ([novelty/errors.py](novelty/errors.py)).
+- `ValidationError` for bad input → HTTP 400.
+- `DataError` names the file and item.
+- `EmbeddingError` for a model or network failure → HTTP 503. Gemini retries transient errors only.
+- `CalibrationError` and `ScoringError` name the failing signal.
+
+The CLI prints `error: ...` and exits with code 2. Anything that's only an optimisation degrades with a warning instead of failing: the embedding cache, spelling correction, and saving the submissions log.
+
 ## Architecture
 
 ```
@@ -182,6 +212,8 @@ novelty/
     modifiers.py   DuplicateCheck, ContentQuality, Specificity, StanceRarity
     relevance.py   TopicMargin
   scorer.py        NoveltyScorer: analyse → evaluate signals → combine → admission policy
+  errors.py        NoveltyError hierarchy (each also a ValueError / RuntimeError)
+  logging_setup.py configure_logging() for entry points; request-id tag per log line
   server.py        stdlib HTTP server + static/index.html
 ```
 
@@ -239,11 +271,11 @@ python -m novelty demo                     # now uses gemini-embedding-001
 python scripts/generate_corpus.py          # regenerate a synthetic corpus → data/corpus.generated.json
 ```
 
-The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only) shows:
+The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only, responsive, light and dark themes) shows:
 - the article
 - a form for the three properties
-- one-click example probes
-- the full score breakdown, with nearest neighbours
+- two examples per stance, from [data/examples.json](data/examples.json). Each is labelled with what it demonstrates (new idea, common view or off-topic), and `tests/test_examples.py` keeps them honest.
+- the result: the score, a plain-language verdict, novelty and relevance bars, and the most similar existing comment. A collapsed **Details** section holds the formula, every signal, the five nearest comments and the scorer's notes.
 
 It has three buttons:
 - **Score** leaves the corpus unchanged.

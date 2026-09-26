@@ -9,12 +9,9 @@ import itertools
 
 import pytest
 
+from helpers import NOT_NOVEL_MAX, UNREWARDED, assert_novel
 from novelty.data import load_fixed_content
 from novelty.models import Stance, Submission
-
-UNREWARDED = 0.01
-NOT_NOVEL_MAX = 0.25
-NOVEL_MIN = 0.6
 
 CYRILLIC = str.maketrans({"a": "а", "e": "е", "o": "о", "p": "р", "c": "с"})
 
@@ -169,10 +166,10 @@ def test_flooding_the_corpus_with_variants_does_not_inflate_other_scores(scorer,
     for pid in before:
         assert abs(after[pid] - before[pid]) <= 0.15, (pid, before[pid], after[pid])
     for s in probes["novel_relevant"]:
-        assert after[s.id] >= NOVEL_MIN
+        assert_novel(scorer, s)
 
 
-def test_rejected_submissions_never_enter_the_corpus(scorer):
+def test_rejected_submissions_never_enter_the_corpus(scorer, corpus_size):
     c01 = _by_id(scorer, "c01")
     results = [
         scorer.submit(Submission(headline=c01.headline, body=c01.body, stance="support")),  # copy
@@ -180,7 +177,7 @@ def test_rejected_submissions_never_enter_the_corpus(scorer):
         scorer.submit(Submission(headline="Bread", body="Rye flour makes sourdough starters much more lively.", stance="support")),
     ]
     assert [r.admitted for r in results] == [False, False, False]
-    assert len(scorer.corpus) == 50
+    assert len(scorer.corpus) == corpus_size
 
 
 # ---------------------------------------------------------------- positive controls
@@ -188,14 +185,14 @@ def test_rejected_submissions_never_enter_the_corpus(scorer):
 
 def test_genuinely_novel_ideas_survive_every_defence(scorer, probes):
     for sub in probes["novel_relevant"]:
-        r = scorer.score(sub)
-        assert r.score >= NOVEL_MIN and r.clause_novelty >= NOVEL_MIN, (sub.id, r)
+        r = assert_novel(scorer, sub)
+        if r.score > 0:
+            assert r.clause_novelty >= 0.6, (sub.id, r)
 
 
 def test_novel_idea_with_a_friendly_opener_is_still_rewarded(scorer):
-    r = scorer.score(Submission(
+    assert_novel(scorer, Submission(
         headline="Solar canopies over the shuttle lot",
         body="Great to see this passing. The outer shuttle lot is acres of bare asphalt; solar canopies would "
              "shade parked cars and the power they generate could help pay for park maintenance.",
-        stance=Stance.SUPPORT))
-    assert r.score >= 0.5, r
+        stance=Stance.SUPPORT), minimum=0.5)
