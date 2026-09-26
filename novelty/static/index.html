@@ -61,6 +61,7 @@
     <div class="row">
       <button class="primary" type="submit" data-commit="false">Score</button>
       <button type="submit" data-commit="true" title="Score it, then add it to the corpus so later submissions are compared against it">Score &amp; add to corpus</button>
+      <button type="button" id="reset" title="Remove everything you added (data/user_submissions.json)">Reset my submissions</button>
     </div>
   </form>
 
@@ -70,12 +71,14 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let corpus = {};
+let userCount = 0;
 
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 async function init() {
   const ctx = await (await fetch('/api/context')).json();
   corpus = ctx.corpus;
+  userCount = ctx.user_count;
   $('title').textContent = ctx.fixed.title;
   $('text').textContent = ctx.fixed.text;
   $('stance').innerHTML = ctx.stances.map(s => `<option>${s}</option>`).join('');
@@ -94,7 +97,8 @@ async function init() {
 
 function updateMeta(embedder) {
   if (embedder) updateMeta.embedder = embedder;
-  $('meta').textContent = `${Object.keys(corpus).length} submissions in corpus · ${updateMeta.embedder}`;
+  const added = userCount ? ` (${userCount} added by you, saved in data/user_submissions.json)` : '';
+  $('meta').textContent = `${Object.keys(corpus).length} submissions in corpus${added} · ${updateMeta.embedder}`;
 }
 
 $('form').addEventListener('submit', async (e) => {
@@ -111,6 +115,7 @@ $('form').addEventListener('submit', async (e) => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     corpus = data.corpus;
+    userCount = data.user_count;
     updateMeta();
     render(data.result, commit ? data.id : null);
   } catch (err) {
@@ -119,6 +124,15 @@ $('form').addEventListener('submit', async (e) => {
   } finally {
     buttons.forEach(b => b.disabled = false);
   }
+});
+
+$('reset').addEventListener('click', async () => {
+  if (!confirm('Remove all submissions you added to the corpus?')) return;
+  const data = await (await fetch('/api/reset', { method: 'POST' })).json();
+  corpus = data.corpus;
+  userCount = data.user_count;
+  updateMeta();
+  $('result').hidden = true;
 });
 
 function render(r, addedId) {
@@ -141,7 +155,7 @@ function render(r, addedId) {
     <ul>${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
     <div class="muted" style="margin-top:10px">Nearest existing submissions</div>
     <ul>${nearest}</ul>
-    ${addedId ? `<p class="ok">Added to corpus as ${esc(addedId)}. Submitting the same idea again will now score lower.</p>` : ''}`;
+    ${addedId ? `<p class="ok">Added to corpus as ${esc(addedId)} and saved to data/user_submissions.json. Submitting the same idea again will now score lower.</p>` : ''}`;
 }
 
 init().catch(err => { $('meta').innerHTML = `<span class="error">${esc(err.message)}</span>`; });

@@ -111,7 +111,7 @@ python -m novelty demo                     # now uses gemini-embedding-001
 python scripts/generate_corpus.py          # regenerate a synthetic corpus → data/corpus.generated.json
 ```
 
-The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only) shows the article, a form for the three properties, one-click example probes, and the full score breakdown with nearest neighbours. **Score** leaves the corpus unchanged. **Score & add to corpus** submits the comment, so the same idea scores lower the next time. The corpus is in-memory and resets when the server restarts.
+The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only) shows the article, a form for the three properties, one-click example probes, and the full score breakdown with nearest neighbours. **Score** leaves the corpus unchanged. **Score & add to corpus** submits the comment, so the same idea scores lower the next time. Added comments are saved to `data/user_submissions.json` (gitignored) and reloaded when the server restarts. **Reset my submissions** clears them. They're deliberately kept out of `data/corpus.json`, the fixed 50-item seed corpus that the tests and the numbers above are calibrated against.
 
 The first run downloads `BAAI/bge-small-en-v1.5` (~70 MB ONNX) into `.cache/`. Embeddings are cached on disk by model and text hash.
 

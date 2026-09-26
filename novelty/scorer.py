@@ -81,9 +81,12 @@ class NoveltyScorer:
     def corpus(self) -> list[Submission]:
         return list(self._corpus)
 
-    def add(self, sub: Submission) -> None:
-        """Add a trusted, on-topic submission to the reference corpus."""
-        self._add_many([sub], on_topic=True)
+    def add(self, sub: Submission, on_topic: bool = True) -> None:
+        """Add a submission to the reference corpus without scoring it (e.g. when reloading).
+
+        ``on_topic`` controls whether it joins the topic centroid; see ``submit``.
+        """
+        self._add_many([sub], on_topic=on_topic)
 
     def submit(self, sub: Submission) -> ScoreBreakdown:
         """Score against everything seen so far, then add it to the corpus.
