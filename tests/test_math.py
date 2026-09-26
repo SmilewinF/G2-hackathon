@@ -219,3 +219,12 @@ def test_tfidf_refits_periodically_not_on_every_insert():
         versions.append(scorer.index.version)
     refits = len(set(versions) - {v0})
     assert 1 <= refits <= 5, versions  # 13 -> 23 entries in 10% growth steps: refits at 15, 17, 19, 21
+
+
+def test_fork_is_independent_of_its_source(toy_scorer):
+    fork = toy_scorer.fork()
+    fork.add(Submission(headline="Fork only", body="The garage could become a covered skate park for the downtown kids.",
+                        stance="support", id="f1"))
+    assert len(fork.corpus) == len(toy_scorer.corpus) + 1
+    assert toy_scorer.index.get("f1") is None
+    assert fork.embedder is toy_scorer.embedder  # shared, not copied

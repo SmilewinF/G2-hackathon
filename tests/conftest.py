@@ -16,10 +16,15 @@ def embedder():
     return default_embedder()
 
 
-@pytest.fixture
-def scorer(embedder):
-    """Fresh scorer per test: ``submit`` mutates the corpus."""
+@pytest.fixture(scope="session")
+def base_scorer(embedder):
     return build_scorer(embedder)
+
+
+@pytest.fixture
+def scorer(base_scorer):
+    """Independent scorer per test (``submit`` mutates the corpus), forked from one build."""
+    return base_scorer.fork()
 
 
 @pytest.fixture(scope="session")

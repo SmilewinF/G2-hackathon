@@ -18,14 +18,15 @@ def user_file(tmp_path):
 
 
 @pytest.fixture
-def app(embedder, user_file):
-    return App(lambda: build_scorer(embedder), user_file)
+def app(base_scorer, user_file):
+    return App(base_scorer.fork, user_file)
 
 
 @pytest.fixture
 def base_url(app):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    # short poll interval: shutdown() otherwise waits up to 0.5 s per test
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
 
@@ -41,16 +42,17 @@ def test_page_and_context_are_served(base_url):
         assert b"Novelty Scorer" in resp.read()
     with urllib.request.urlopen(base_url + "/api/context") as resp:
         ctx = json.load(resp)
-    assert len(ctx["corpus"]) == 50 and ctx["stances"] and ctx["probes"]["novel_relevant"]
+    assert ctx["corpus_size"] == 50 and ctx["stances"] and ctx["probes"]["novel_relevant"]
 
 
 def test_score_does_not_change_corpus_but_commit_does(base_url, probes):
     p = probes["novel_relevant"][0]
     payload = {"headline": p.headline, "body": p.body, "stance": p.stance.value}
     scored = _post(base_url + "/api/score", payload)
-    assert scored["result"]["score"] >= 0.6 and len(scored["corpus"]) == 50
+    assert scored["result"]["score"] >= 0.6 and scored["corpus_size"] == 50
+    assert all("headline" in n for n in scored["result"]["nearest"])
     committed = _post(base_url + "/api/score", {**payload, "commit": True})
-    assert committed["id"] == "u01" and len(committed["corpus"]) == 51
+    assert committed["id"] == "u01" and committed["corpus_size"] == 51
     again = _post(base_url + "/api/score", payload)
     assert again["result"]["near_duplicate_of"] == "u01" and again["result"]["score"] == 0.0
 
@@ -75,7 +77,7 @@ def test_committed_submissions_are_saved_and_reloaded(base_url, probes, embedder
 def test_rejected_submissions_are_logged_but_not_replayed(base_url, probes, embedder, user_file):
     p = probes["off_topic"][0]
     resp = _post(base_url + "/api/score", {"headline": p.headline, "body": p.body, "stance": p.stance.value, "commit": True})
-    assert resp["result"]["admitted"] is False and resp["id"] is None and len(resp["corpus"]) == 50
+    assert resp["result"]["admitted"] is False and resp["id"] is None and resp["corpus_size"] == 50
     assert json.loads(user_file.read_text(encoding="utf-8"))[0]["admitted"] is False
     restarted = App(lambda: build_scorer(embedder), user_file)
     assert len(restarted.scorer.corpus) == 50
@@ -125,11 +127,11 @@ def test_oversized_request_is_refused(base_url):
 def test_commit_must_be_literally_true(base_url, probes):
     p = probes["novel_relevant"][0]
     resp = _post(base_url + "/api/score", {"headline": p.headline, "body": p.body, "stance": p.stance.value, "commit": "false"})
-    assert len(resp["corpus"]) == 50  # the string "false" is truthy; it must not commit
+    assert resp["corpus_size"] == 50  # the string "false" is truthy; it must not commit
 
 
 def test_reset_forgets_user_submissions(base_url, probes, user_file):
     p = probes["novel_relevant"][2]
     _post(base_url + "/api/score", {"headline": p.headline, "body": p.body, "stance": p.stance.value, "commit": True})
     state = _post(base_url + "/api/reset", {})
-    assert state["user_count"] == 0 and len(state["corpus"]) == 50 and not user_file.exists()
+    assert state["user_count"] == 0 and state["corpus_size"] == 50 and not user_file.exists()

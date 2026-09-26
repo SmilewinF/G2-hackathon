@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import socket
 import sys
 import threading
 import traceback
@@ -46,22 +47,30 @@ class App:
 
     def __init__(self, scorer_factory: Callable[[], NoveltyScorer], user_file: Path) -> None:
         self.lock = threading.Lock()
-        self._factory = scorer_factory
+        self._pristine = scorer_factory()  # seed corpus only; reset() forks it instead of rebuilding
         self.user_file = user_file
         self._load()
 
     # ------------------------------------------------------------------ persistence
 
     def _load(self) -> None:
-        self.scorer = self._factory()
+        self.scorer = self._pristine.fork()
         self.records = self._read_records()
+        replay, seen = [], {s.id for s in self.scorer.corpus}
         for rec in self.records:
             if not rec.get("admitted"):
                 continue
             try:
-                self.scorer.add(Submission.from_dict(rec))
+                sub = Submission.from_dict(rec)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"skipping saved submission {rec.get('id')!r}: {e}", file=sys.stderr)
+                continue
+            if sub.id in seen:
+                print(f"skipping saved submission with duplicate id {sub.id!r}", file=sys.stderr)
+                continue
+            seen.add(sub.id)
+            replay.append(sub)
+        self.scorer.add_many(replay)  # one recalibration for the whole log, not one per record
 
     def _read_records(self) -> list[dict]:
         if not self.user_file.exists():
@@ -88,8 +97,11 @@ class App:
     def admitted_count(self) -> int:
         return sum(bool(r.get("admitted")) for r in self.records)
 
-    def corpus_headlines(self) -> dict[str, str]:
-        return {s.id: s.headline for s in self.scorer.corpus}
+    def headline(self, entry_id: str) -> str:
+        if entry_id == "article":
+            return self.scorer.fixed.title
+        entry = self.scorer.index.get(entry_id)
+        return entry.submission.headline if entry and entry.submission else ""
 
     def submit(self, sub: Submission):
         sub = dataclasses.replace(sub, id=f"u{len(self.records) + 1:02d}")
@@ -157,7 +169,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error, see server log"})
 
         def _state(self) -> dict:
-            return {"corpus": app.corpus_headlines(), "user_count": app.admitted_count}
+            # Sizes only: shipping every headline on every response made payloads O(corpus).
+            return {"corpus_size": len(app.scorer.corpus), "user_count": app.admitted_count}
 
         # -------------------------------------------------------------- routes
 
@@ -202,22 +215,49 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     sub, result = app.submit(sub)
                 else:
                     result = app.scorer.score(sub)
+                payload = dataclasses.asdict(result)
+                for n in payload["nearest"]:
+                    n["headline"] = app.headline(n["id"])
                 self._json(HTTPStatus.OK, {
                     **self._state(),
-                    "result": dataclasses.asdict(result),
+                    "result": payload,
                     "id": sub.id if result.admitted else None,
                 })
 
     return Handler
 
 
+class _IPv6Server(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def _loopback_servers(host: str, port: int, handler) -> list[ThreadingHTTPServer]:
+    """Listen on IPv4 *and* IPv6 loopback. On Windows "localhost" resolves to ::1 first, and a
+    refused IPv6 connect costs ~200 ms per request before the client falls back to IPv4."""
+    servers = [ThreadingHTTPServer((host, port), handler)]
+    if host in ("127.0.0.1", "localhost") and socket.has_ipv6:
+        try:
+            servers.append(_IPv6Server(("::1", port), handler))
+        except OSError:
+            pass  # IPv6 loopback unavailable: IPv4 still works
+    return servers
+
+
 def serve(port: int = 8000, host: str = "127.0.0.1", user_file: Path = USER_FILE) -> None:
     print("loading model and corpus...")
     app = App(build_scorer, user_file)
-    httpd = ThreadingHTTPServer((host, port), make_handler(app))
+    # With a warm embedding cache the model was never loaded; load it now in the background so
+    # the first new text does not pay for it, without delaying startup.
+    threading.Thread(target=getattr(app.scorer.embedder, "warmup", lambda: None), daemon=True).start()
+    servers = _loopback_servers(host, port, make_handler(app))
     print(f"loaded {app.admitted_count} saved user submission(s) from {user_file.name}")
     print(f"open http://{host}:{port}  (embedder: {app.scorer.embedder.name}, Ctrl+C to stop)")
+    for extra in servers[1:]:
+        threading.Thread(target=extra.serve_forever, daemon=True).start()
     try:
-        httpd.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        for srv in servers:
+            srv.server_close()

@@ -115,7 +115,7 @@ class ReferenceIndex:
         dim = anchor_vecs.shape[1]
 
         self.entries: list[Entry] = []
-        self._ids: set[str] = set()
+        self._by_id: dict[str, int] = {}
         self._dense, self._content, self._clause_dense = _Rows(dim), _Rows(dim), _Rows(dim)
         self._on_topic: list[bool] = []
         self._topic_sum = np.zeros(dim, dtype=np.float64)
@@ -139,7 +139,7 @@ class ReferenceIndex:
         for sub in subs:
             if sub.id is None:
                 raise ValueError("submissions added to the index need an id")
-            if sub.id in self._ids or sub.id in batch_ids:
+            if sub.id in self._by_id or sub.id in batch_ids:
                 raise ValueError(f"duplicate submission id {sub.id!r}")
             batch_ids.add(sub.id)
         start = len(self.entries)
@@ -160,7 +160,7 @@ class ReferenceIndex:
             idx = len(self.entries)
             self.entries.append(Entry(eid, prep.analysis_text, sub, on_topic, shingles(prep.text), prep.clauses,
                                       prep.substantive, tuple(range(first_clause, first_clause + n_cl))))
-            self._ids.add(eid)
+            self._by_id[eid] = idx
             self._dense.extend(vecs[start : start + 1])
             self._content.extend(vecs[start + 1 : start + 2])
             self._clause_dense.extend(vecs[start + 2 : start + 2 + n_cl])
@@ -188,6 +188,10 @@ class ReferenceIndex:
 
     def __len__(self) -> int:
         return len(self.entries)
+
+    def get(self, entry_id: str) -> Entry | None:
+        i = self._by_id.get(entry_id)
+        return None if i is None else self.entries[i]
 
     @property
     def version(self) -> int:

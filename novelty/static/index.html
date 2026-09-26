@@ -70,14 +70,14 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let corpus = {};
+let corpusSize = 0;
 let userCount = 0;
 
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 async function init() {
   const ctx = await (await fetch('/api/context')).json();
-  corpus = ctx.corpus;
+  corpusSize = ctx.corpus_size;
   userCount = ctx.user_count;
   $('title').textContent = ctx.fixed.title;
   $('text').textContent = ctx.fixed.text;
@@ -98,7 +98,7 @@ async function init() {
 function updateMeta(embedder) {
   if (embedder) updateMeta.embedder = embedder;
   const added = userCount ? ` (${userCount} added by you, saved in data/user_submissions.json)` : '';
-  $('meta').textContent = `${Object.keys(corpus).length} submissions in corpus${added} · ${updateMeta.embedder}`;
+  $('meta').textContent = `${corpusSize} submissions in corpus${added} · ${updateMeta.embedder}`;
 }
 
 $('form').addEventListener('submit', async (e) => {
@@ -114,7 +114,7 @@ $('form').addEventListener('submit', async (e) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    corpus = data.corpus;
+    corpusSize = data.corpus_size;
     userCount = data.user_count;
     updateMeta();
     render(data.result, commit);
@@ -129,7 +129,7 @@ $('form').addEventListener('submit', async (e) => {
 $('reset').addEventListener('click', async () => {
   if (!confirm('Remove all submissions you added to the corpus?')) return;
   const data = await (await fetch('/api/reset', { method: 'POST' })).json();
-  corpus = data.corpus;
+  corpusSize = data.corpus_size;
   userCount = data.user_count;
   updateMeta();
   $('result').hidden = true;
@@ -138,7 +138,7 @@ $('reset').addEventListener('click', async () => {
 function render(r, committed) {
   const pct = (x) => `${Math.round(x * 100)}%`;
   const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v ?? '—')}</td></tr>`;
-  const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(corpus[n.id] || '')}</li>`).join('');
+  const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(n.headline || '')}</li>`).join('');
   $('result').hidden = false;
   $('result').innerHTML = `
     <div class="muted">Reward</div>
