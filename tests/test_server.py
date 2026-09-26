@@ -5,34 +5,13 @@ web-UI submissions in full mode) and writes to its own temporary submissions fil
 """
 
 import json
-import threading
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
 
 import pytest
 
-from helpers import already_submitted
-from novelty.server import App, make_handler
-
-
-@pytest.fixture
-def user_file(tmp_path):
-    return tmp_path / "user_submissions.json"
-
-
-@pytest.fixture
-def app(base_scorer, user_file):
-    return App(base_scorer.fork, user_file)
-
-
-@pytest.fixture
-def base_url(app):
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
-    # short poll interval: shutdown() otherwise waits up to 0.5 s per test
-    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
-    yield f"http://127.0.0.1:{httpd.server_port}"
-    httpd.shutdown()
+from helpers import already_submitted, request_json
+from novelty.server import App
 
 
 def _post(url, payload):
@@ -115,13 +94,8 @@ def test_bad_saved_records_are_skipped(base_scorer, user_file, corpus_size):
     assert [s.id for s in app.scorer.corpus][-1] == "t02" and len(app.scorer.corpus) == corpus_size + 1
 
 
-def _raw(base_url, body: bytes, headers=None):
-    req = urllib.request.Request(base_url + "/api/score", body, headers or {"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp.status, json.load(resp)
-    except urllib.error.HTTPError as e:
-        return e.code, json.load(e)
+def _raw(base_url, body: bytes):
+    return request_json(base_url + "/api/score", body)
 
 
 @pytest.mark.parametrize(

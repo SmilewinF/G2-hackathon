@@ -1,4 +1,4 @@
-"""Shared test helpers: thresholds, the test-corpus mode, and a model-free toy embedder.
+"""Shared test helpers: thresholds, the test-corpus mode, novelty assertions, and a model-free toy embedder and corpus.
 
 Tests run against the WHOLE corpus by default: the 50 seed comments in data/corpus.json plus
 every admitted submission the web UI saved to data/user_submissions.json. Set
@@ -7,13 +7,17 @@ NOVELTY_TEST_CORPUS=seed to pin the suite to the seed corpus (reproducible CI ru
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
+import urllib.request
 import zlib
 
 import numpy as np
 import pytest
 
 from novelty.data import load_user_submissions
+from novelty.models import Stance, Submission
 
 NOVEL_MIN = 0.6  # truly novel, relevant submissions must earn at least this
 NOT_NOVEL_MAX = 0.25  # copies and paraphrases of existing takes must earn at most this
@@ -50,6 +54,21 @@ def already_submitted(scorer, sub) -> str | None:
     return r.near_duplicate_of if r.near_duplicate_of in USER_IDS else None
 
 
+def corpus_entry(scorer, entry_id: str):
+    """The corpus submission with this id."""
+    return next(s for s in scorer.corpus if s.id == entry_id)
+
+
+def request_json(url: str, body: bytes | None = None) -> tuple[int, dict]:
+    """(status, JSON payload) for a GET (no body) or a JSON POST, including error responses."""
+    req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.load(resp)
+    except urllib.error.HTTPError as e:
+        return e.code, json.load(e)
+
+
 class HashEmbedder:
     """Deterministic bag-of-words embedder so scorer invariants can be tested without a model."""
 
@@ -61,3 +80,18 @@ class HashEmbedder:
             for w in t.lower().split():
                 out[i, zlib.crc32(w.encode()) % 64] += 1.0
         return out / np.clip(np.linalg.norm(out, axis=1, keepdims=True), 1e-12, None)
+
+
+TOY_ANCHORS = ["the football match was great and the striker scored twice in the final minutes"]
+
+
+def toy_corpus() -> list[Submission]:
+    """Twelve near-identical on-topic comments (every fourth opposes) for model-free scorer tests."""
+    return [
+        Submission(
+            headline=f"Garage idea {i}",
+            body=f"The council plan for the garage and the park is idea number {i} for the downtown area.",
+            stance=Stance.SUPPORT if i % 4 else Stance.OPPOSE,
+        )
+        for i in range(12)
+    ]

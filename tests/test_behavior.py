@@ -8,20 +8,23 @@ copy instead of rewarded (see helpers.assert_novel).
 
 import pytest
 
-from helpers import NOT_NOVEL_MAX, NOVEL_MIN, UNREWARDED, USER_IDS, already_submitted, assert_novel
+from helpers import NOT_NOVEL_MAX, NOVEL_MIN, UNREWARDED, USER_IDS, already_submitted, assert_novel, corpus_entry
+from novelty.data import load_probes
 from novelty.models import Stance, Submission
+
+PROBE_COUNTS = {group: len(items) for group, items in load_probes().items()}  # parametrize over every probe
 
 # ---------------------------------------------------------------- the four required behaviours
 
 
-@pytest.mark.parametrize("idx", range(3))
+@pytest.mark.parametrize("idx", range(PROBE_COUNTS["novel_relevant"]))
 def test_truly_novel_relevant_content_is_rewarded(scorer, probes, idx):
     sub = probes["novel_relevant"][idx]
     r = assert_novel(scorer, sub)
     assert r.relevance_gate == 1.0
 
 
-@pytest.mark.parametrize("idx", range(5))
+@pytest.mark.parametrize("idx", range(PROBE_COUNTS["duplicates"]))
 def test_non_novel_content_is_not_rewarded(scorer, probes, idx):
     sub = probes["duplicates"][idx]
     r = scorer.score(sub)
@@ -29,7 +32,7 @@ def test_non_novel_content_is_not_rewarded(scorer, probes, idx):
     assert r.relevance_gate > 0.9, "these are on-topic: the low score must come from novelty"
 
 
-@pytest.mark.parametrize("idx", range(3))
+@pytest.mark.parametrize("idx", range(PROBE_COUNTS["off_topic"]))
 def test_high_novelty_but_low_relevance_is_not_rewarded(scorer, probes, idx):
     sub = probes["off_topic"][idx]
     r = scorer.score(sub)
@@ -73,7 +76,7 @@ def test_changing_only_the_stance_does_not_make_a_copy_novel(scorer, probes):
 
 
 def test_padding_a_copy_with_extra_words_is_still_a_copy(scorer):
-    original = scorer.corpus[26]  # c27 (seed comments come first)
+    original = corpus_entry(scorer, "c27")
     padded = Submission(
         headline=original.headline + "!!",
         body="Honestly I have to say this. " + original.body + " Just my two cents.",
