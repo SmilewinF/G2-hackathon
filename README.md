@@ -18,6 +18,7 @@ Everything runs offline on a local embedding model (no API key needed). If `GEMI
   - 55% of new ideas and 50% of paraphrases are handled correctly;
   - see [Held-out evaluation](#held-out-evaluation) for the full picture, including what still fails.
 - **Deliverables:** 189 automated tests, a CLI, a JSON API and a responsive web UI.
+- **Plain-language design notes:** [docs/DESIGN.md](docs/DESIGN.md) ([PDF](docs/DESIGN.pdf)) cover the design, rationale, success criteria, results and limitations without the jargon.
 
 ## 1. The content shape
 
