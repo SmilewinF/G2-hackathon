@@ -10,6 +10,7 @@ Hackathon solution (G2, "Rewarding novelty in submissions"): score a user submis
 .venv/Scripts/python -m pip install -e ".[dev,gemini]"   # venv lives in .venv (Windows layout)
 .venv/Scripts/python -m pytest                            # full suite
 .venv/Scripts/python -m pytest tests/test_behavior.py::test_same_town_different_subject_is_not_rewarded
+.venv/Scripts/python -m novelty serve                     # web UI at http://127.0.0.1:8000 (novelty/server.py + static/index.html, stdlib only)
 .venv/Scripts/python -m novelty demo                      # score table for data/probes.json — check after any scoring change
 .venv/Scripts/python -m novelty corpus                    # leave-one-out novelty per corpus item
 .venv/Scripts/python -m novelty score --headline ... --body ... --stance support [--json]

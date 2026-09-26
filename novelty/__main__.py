@@ -3,6 +3,7 @@
     python -m novelty demo                      # score every labelled probe
     python -m novelty corpus                    # leave-one-out novelty of each corpus item
     python -m novelty score --headline ... --body ... --stance support [--json]
+    python -m novelty serve [--port 8000]      # minimal web UI at http://127.0.0.1:8000
 """
 
 from __future__ import annotations
@@ -45,6 +46,12 @@ def _cmd_score(args: argparse.Namespace) -> None:
         print(f"  - {reason}")
 
 
+def _cmd_serve(args: argparse.Namespace) -> None:
+    from .server import serve
+
+    serve(port=args.port)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="novelty")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -56,6 +63,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--stance", required=True, choices=[s.value for s in Stance])
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=_cmd_score)
+    p = sub.add_parser("serve")
+    p.add_argument("--port", type=int, default=8000)
+    p.set_defaults(fn=_cmd_serve)
     args = parser.parse_args(argv)
     args.fn(args)
 

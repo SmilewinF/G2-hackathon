@@ -73,7 +73,7 @@ The corpus updates as submissions arrive. A reworded version of the stormwater i
 ## 4. Automated tests
 
 ```
-pytest            # 37 tests, ~2 s after the first model download
+pytest            # 40 tests, ~3 s after the first model download
 ```
 
 | Requirement from the brief | Test ([tests/test_behavior.py](tests/test_behavior.py)) |
@@ -97,6 +97,7 @@ python -m venv .venv
 pip install -e ".[dev,gemini]"
 
 pytest
+python -m novelty serve                    # minimal web UI at http://127.0.0.1:8000
 python -m novelty demo                     # score all labelled probes
 python -m novelty corpus                   # leave-one-out novelty of each corpus item
 python -m novelty score --stance support \
@@ -109,6 +110,8 @@ export GEMINI_API_KEY=...
 python -m novelty demo                     # now uses gemini-embedding-001
 python scripts/generate_corpus.py          # regenerate a synthetic corpus → data/corpus.generated.json
 ```
+
+The web UI (`novelty/server.py` + `novelty/static/index.html`, standard library only) shows the article, a form for the three properties, one-click example probes, and the full score breakdown with nearest neighbours. **Score** leaves the corpus unchanged. **Score & add to corpus** submits the comment, so the same idea scores lower the next time. The corpus is in-memory and resets when the server restarts.
 
 The first run downloads `BAAI/bge-small-en-v1.5` (~70 MB ONNX) into `.cache/`. Embeddings are cached on disk by model and text hash.
 

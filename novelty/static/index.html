@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Novelty Scorer</title>
+<style>
+  :root { --bg:#fafaf9; --fg:#1c1917; --muted:#78716c; --card:#fff; --line:#e7e5e4; --accent:#2563eb; --good:#16a34a; --bad:#dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1c1917; --fg:#f5f5f4; --muted:#a8a29e; --card:#292524; --line:#44403c; --accent:#60a5fa; --good:#4ade80; --bad:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-top:16px; }
+  .article h2 { font-size:16px; margin:0 0 6px; }
+  .article p { margin:0; }
+  label { display:block; font-weight:600; font-size:13px; margin:12px 0 4px; }
+  input, textarea, select { width:100%; font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; }
+  textarea { min-height:90px; resize:vertical; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--bg); color:inherit; border-radius:6px; padding:7px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .examples button { font-size:12px; padding:3px 8px; }
+  .score { font-size:40px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:4px 0 10px; }
+  .bar > div { height:100%; background:var(--accent); }
+  table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+  td { padding:4px 0; border-bottom:1px solid var(--line); }
+  td:last-child { text-align:right; }
+  ul { margin:8px 0 0; padding-left:18px; font-size:13px; }
+  .error { color:var(--bad); }
+  .ok { color:var(--good); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Novelty Scorer</h1>
+  <div class="muted" id="meta">loading…</div>
+
+  <div class="card article">
+    <div class="muted">Fixed content</div>
+    <h2 id="title"></h2>
+    <p id="text"></p>
+  </div>
+
+  <form class="card" id="form">
+    <div class="muted">Try an example:</div>
+    <div class="row examples" id="examples"></div>
+
+    <label for="headline">Headline</label>
+    <input id="headline" maxlength="120" required>
+    <label for="body">Body</label>
+    <textarea id="body" required></textarea>
+    <label for="stance">Stance</label>
+    <select id="stance"></select>
+
+    <div class="row">
+      <button class="primary" type="submit" data-commit="false">Score</button>
+      <button type="submit" data-commit="true" title="Score it, then add it to the corpus so later submissions are compared against it">Score &amp; add to corpus</button>
+    </div>
+  </form>
+
+  <div class="card" id="result" hidden></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let corpus = {};
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function init() {
+  const ctx = await (await fetch('/api/context')).json();
+  corpus = ctx.corpus;
+  $('title').textContent = ctx.fixed.title;
+  $('text').textContent = ctx.fixed.text;
+  $('stance').innerHTML = ctx.stances.map(s => `<option>${s}</option>`).join('');
+  updateMeta(ctx.embedder);
+  const labels = { novel_relevant: 'novel', duplicates: 'repeat', off_topic: 'off-topic' };
+  for (const [group, items] of Object.entries(ctx.probes)) {
+    for (const p of items) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `${labels[group] || group}: ${p.headline.slice(0, 28)}…`;
+      b.onclick = () => { $('headline').value = p.headline; $('body').value = p.body; $('stance').value = p.stance; };
+      $('examples').appendChild(b);
+    }
+  }
+}
+
+function updateMeta(embedder) {
+  if (embedder) updateMeta.embedder = embedder;
+  $('meta').textContent = `${Object.keys(corpus).length} submissions in corpus · ${updateMeta.embedder}`;
+}
+
+$('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const commit = e.submitter?.dataset.commit === 'true';
+  const buttons = $('form').querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/api/score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ headline: $('headline').value, body: $('body').value, stance: $('stance').value, commit }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    corpus = data.corpus;
+    updateMeta();
+    render(data.result, commit ? data.id : null);
+  } catch (err) {
+    $('result').hidden = false;
+    $('result').innerHTML = `<span class="error">${esc(err.message)}</span>`;
+  } finally {
+    buttons.forEach(b => b.disabled = false);
+  }
+});
+
+function render(r, addedId) {
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v)}</td></tr>`;
+  const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(corpus[n.id] || '')}</li>`).join('');
+  $('result').hidden = false;
+  $('result').innerHTML = `
+    <div class="muted">Reward</div>
+    <div class="score">${r.score.toFixed(3)}</div>
+    <div class="bar"><div style="width:${pct(r.score)}"></div></div>
+    <table>
+      ${row('Novelty', r.novelty)}
+      ${row('Relevance', r.relevance)}
+      ${row('Relevance gate', r.relevance_gate)}
+      ${row('Relevance margin', r.relevance_margin)}
+      ${row('Stance rarity', r.stance_rarity)}
+      ${row('Near-duplicate of', r.near_duplicate_of || '—')}
+    </table>
+    <ul>${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+    <div class="muted" style="margin-top:10px">Nearest existing submissions</div>
+    <ul>${nearest}</ul>
+    ${addedId ? `<p class="ok">Added to corpus as ${esc(addedId)}. Submitting the same idea again will now score lower.</p>` : ''}`;
+}
+
+init().catch(err => { $('meta').innerHTML = `<span class="error">${esc(err.message)}</span>`; });
+</script>
+</body>
+</html>
