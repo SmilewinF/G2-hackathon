@@ -1,0 +1,60 @@
+[
+  {"id": "c01", "stance": "oppose", "headline": "No parking means no customers", "body": "I run a shoe repair shop on Main Street. Most of my customers drive in, drop off, and leave. Take away 600 spaces and they will just go to the mall where parking is free and easy."},
+  {"id": "c02", "stance": "oppose", "headline": "Small businesses will pay the price", "body": "Downtown shops are already struggling. Removing the only big garage is going to push shoppers out to the suburbs and some of us will close for good."},
+  {"id": "c03", "stance": "oppose", "headline": "Where are people supposed to park?", "body": "Street parking is already full by 10am. Without the Elm Street garage there is simply nowhere for visitors to leave their cars. The council has not answered this basic question."},
+  {"id": "c04", "stance": "oppose", "headline": "Parking is the lifeblood of downtown", "body": "Every retailer I know says the same thing: customers need a place to park. A park is nice, but a park does not pay rent. Losing the garage will hollow out Main Street."},
+  {"id": "c05", "stance": "oppose", "headline": "This will drive shoppers to the malls", "body": "The malls have thousands of free spaces. If we make downtown harder to reach by car, people will simply shop there instead. The shop owners quoted in the article are right."},
+  {"id": "c06", "stance": "oppose", "headline": "Council ignoring business owners", "body": "Main Street merchants begged the council to keep the parking. Instead they voted to tear it down. Losing 600 spaces will cost us customers and jobs."},
+  {"id": "c07", "stance": "mixed", "headline": "Park is fine but replace the parking first", "body": "I like the idea of more green space, but we cannot lose all that parking at once. Build a replacement garage nearby before demolishing Elm Street, otherwise shops will suffer."},
+  {"id": "c08", "stance": "oppose", "headline": "My restaurant depends on that garage", "body": "Dinner guests park in the Elm Street garage every night. Without it, our weekend reservations will drop. People will not walk six blocks in the rain for dinner."},
+  {"id": "c09", "stance": "oppose", "headline": "Customers won't come without parking", "body": "It is really simple. If people cannot park near the stores they will not come downtown. The garage is essential for the businesses on Main Street."},
+  {"id": "c10", "stance": "oppose", "headline": "Parking loss will kill Main Street", "body": "Losing hundreds of parking spaces downtown is going to be a disaster for local stores. Shoppers will head to the suburban malls and never come back."},
+
+  {"id": "c11", "stance": "support", "headline": "Finally somewhere for kids to play", "body": "There is no playground within walking distance of downtown apartments. A two-acre park would give families like mine a safe place for the kids after school."},
+  {"id": "c12", "stance": "support", "headline": "Green space makes a city livable", "body": "Parks are what make a downtown feel like a neighborhood. This will improve quality of life for everyone who lives and works nearby."},
+  {"id": "c13", "stance": "support", "headline": "Great news for families", "body": "As a parent I am thrilled. We need more places where children can run around, have picnics and meet other kids. This park is long overdue."},
+  {"id": "c14", "stance": "support", "headline": "A park beats an ugly concrete garage", "body": "That garage is an eyesore. Replacing it with trees, lawns and benches will make downtown so much more pleasant to live in."},
+  {"id": "c15", "stance": "support", "headline": "More parks, fewer cars", "body": "Cities that build parks instead of parking become nicer places to live. I fully support the council on this one and hope they add a playground."},
+  {"id": "c16", "stance": "support", "headline": "Downtown residents need a backyard", "body": "Thousands of us live in apartments with no yard. A public park would be our shared backyard, a place to relax, walk the dog and meet neighbors."},
+  {"id": "c17", "stance": "support", "headline": "Quality of life should come first", "body": "I am tired of downtown being designed around cars. A park will make the area healthier and happier for the people who actually live here."},
+  {"id": "c18", "stance": "support", "headline": "Kids deserve green space", "body": "Children downtown grow up surrounded by asphalt. This park will give them grass, trees and room to play. Good decision by the council."},
+  {"id": "c19", "stance": "support", "headline": "Proud of this vote", "body": "Turning a parking garage into a park is exactly the kind of forward thinking Riverton needs. Families and seniors will enjoy it for decades."},
+
+  {"id": "c20", "stance": "oppose", "headline": "$14 million is too much", "body": "Fourteen million dollars for a park while our roads are full of potholes? The council has its priorities backwards. This money should go to basic services."},
+  {"id": "c21", "stance": "oppose", "headline": "Another tax on struggling businesses", "body": "The new downtown business levy is just another tax on shops that are already barely surviving. Taking away their parking and taxing them for it adds insult to injury."},
+  {"id": "c22", "stance": "mixed", "headline": "Who pays when costs go over budget?", "body": "Public projects always run over budget. If this ends up costing $20 million instead of $14 million, will the levy go up? Taxpayers deserve a clear answer."},
+  {"id": "c23", "stance": "oppose", "headline": "Wasteful spending", "body": "I cannot support spending $14 million of public money on demolition and landscaping. That is a lot of taxpayer money for grass."},
+  {"id": "c24", "stance": "oppose", "headline": "Businesses taxed to lose their customers", "body": "So the shops pay a new levy to fund the park that removes their customers' parking. That is absurd. The levy should be scrapped."},
+  {"id": "c25", "stance": "mixed", "headline": "State grants are not free money", "body": "The grants still come from taxpayers. I like parks, but $14 million is a big price tag and I want to see the full budget before I support it."},
+  {"id": "c26", "stance": "oppose", "headline": "Cost is out of line", "body": "Other towns have built parks for a fraction of this. Fourteen million dollars sounds inflated and the council has not shown where the money goes."},
+
+  {"id": "c27", "stance": "support", "headline": "Trees will cool downtown", "body": "Last summer downtown was unbearable. Replacing hot concrete with shade trees will bring temperatures down and make the area bearable during heat waves."},
+  {"id": "c28", "stance": "support", "headline": "Fighting the heat island effect", "body": "Concrete garages soak up heat all day and release it all night. A park with tall trees is one of the best ways to fight the urban heat island."},
+  {"id": "c29", "stance": "support", "headline": "Climate-smart decision", "body": "With summers getting hotter, cities need more trees and less pavement. This park is a smart response to climate change."},
+  {"id": "c30", "stance": "support", "headline": "Shade matters for seniors", "body": "Older residents struggle in the summer heat. A shady park downtown could literally save lives during heat waves."},
+  {"id": "c31", "stance": "support", "headline": "Less asphalt, more trees", "body": "Swapping a concrete garage for grass and trees will make downtown cooler and greener. I hope they plant lots of big shade trees."},
+  {"id": "c32", "stance": "support", "headline": "Cooler summers downtown", "body": "Anyone who has walked past that garage in July knows how hot it gets. A green park will cool the whole neighborhood."},
+
+  {"id": "c33", "stance": "mixed", "headline": "Will anyone actually use the shuttle?", "body": "A free shuttle sounds nice, but who is going to park at an outer lot and wait for a bus just to buy a coffee? I doubt it will be used."},
+  {"id": "c34", "stance": "oppose", "headline": "The shuttle is a band-aid", "body": "Promising a shuttle during construction does nothing for the long term. Once the park is done there will still be 600 fewer spaces."},
+  {"id": "c35", "stance": "mixed", "headline": "Shuttle needs to run often", "body": "If the shuttle only comes every 30 minutes nobody will ride it. The council should commit to frequent service and long hours."},
+  {"id": "c36", "stance": "mixed", "headline": "Details on the shuttle please", "body": "Where exactly is the outer lot, how often will the shuttle run, and for how long? Without details this promise means nothing."},
+  {"id": "c37", "stance": "oppose", "headline": "Shuttle won't work for shoppers", "body": "Nobody wants to carry shopping bags onto a shuttle bus. The shuttle plan does not solve the parking problem for customers."},
+
+  {"id": "c38", "stance": "mixed", "headline": "Who will keep the park safe?", "body": "I worry the park could attract crime at night if it is not well lit and patrolled. The council needs a safety plan before building it."},
+  {"id": "c39", "stance": "mixed", "headline": "Maintenance costs are the real issue", "body": "Building a park is the easy part. Who pays to mow, clean and repair it every year? Our existing parks are already poorly maintained."},
+  {"id": "c40", "stance": "oppose", "headline": "Parks downtown attract trouble", "body": "Our other downtown park became a hangout for drug use and loitering. I am worried this one will end up the same way."},
+  {"id": "c41", "stance": "mixed", "headline": "Lighting and patrols needed", "body": "A park can be great, but only if it is safe after dark. Good lighting, cameras and regular patrols should be part of the plan."},
+  {"id": "c42", "stance": "undecided", "headline": "Worried about upkeep", "body": "I would love a park, but I have seen new parks fall apart because the city never budgets for maintenance. Will there be a long-term upkeep fund?"},
+
+  {"id": "c43", "stance": "support", "headline": "Parks bring more shoppers, not fewer", "body": "People who come to enjoy a park stay and shop. Foot traffic around the park will help Main Street businesses more than a garage ever did."},
+  {"id": "c44", "stance": "support", "headline": "Foot traffic is good for business", "body": "Studies show that pedestrians spend more at local shops over a month than drivers. A park will bring more walkers downtown and help sales."},
+  {"id": "c45", "stance": "support", "headline": "Business owners should welcome this", "body": "A lively park full of people is the best advertising a downtown can get. Shops near the park will see more customers, not fewer."},
+  {"id": "c46", "stance": "support", "headline": "Walkable downtowns thrive", "body": "The most successful downtowns are walkable, with parks and plazas. Riverton should stop designing for cars and start designing for people."},
+
+  {"id": "c47", "stance": "mixed", "headline": "Construction will be a nightmare", "body": "Demolishing a huge concrete garage means months of noise, dust and closed streets. The council should explain how it will limit the disruption for nearby residents."},
+  {"id": "c48", "stance": "mixed", "headline": "Plan for the demolition disruption", "body": "Tearing down the garage will block traffic and create dust for a long time. Businesses need a clear timeline so they can plan around the construction."},
+
+  {"id": "c49", "stance": "undecided", "headline": "Why was the vote rushed?", "body": "The council announced the vote with little notice and public comment only opens after the decision. That is backwards. Residents should have been consulted before the vote, not after."},
+  {"id": "c50", "stance": "support", "headline": "Use it for a weekend farmers market", "body": "A two-acre park would be perfect for a weekly farmers market and summer concerts. That would bring the whole community downtown on weekends."}
+]

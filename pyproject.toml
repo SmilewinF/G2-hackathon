@@ -1,0 +1,23 @@
+[project]
+name = "novelty"
+version = "0.1.0"
+description = "Reward novel-but-relevant user generated content on a [0, 1] scale"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "fastembed>=0.4",
+]
+
+[project.optional-dependencies]
+gemini = ["google-genai>=1.0"]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["novelty"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
