@@ -102,6 +102,8 @@ def test_every_score_component_is_bounded(toy_scorer):
     for text in ["the garage park downtown council plan", "the football goal match striker", "a zebra plays the violin"]:
         r = toy_scorer.score(Submission(headline="x", body=text + " is what I think about it", stance="mixed"))
         for value in (r.score, r.novelty, r.semantic_novelty, r.clause_novelty, r.stance_rarity, r.relevance, r.relevance_gate):
+            if value is None:  # clause_novelty is None for single-clause text
+                continue
             assert 0.0 <= value <= 1.0 and not math.isnan(value)
 
 

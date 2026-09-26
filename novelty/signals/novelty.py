@@ -75,7 +75,12 @@ class ClauseCoverage(Signal):
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
         substantive = np.array(a.substantive, dtype=bool)
         if not substantive.any():
-            return SignalResult(0.0, ["no substantive clause to assess"], {"clause": None})
+            return SignalResult(0.0, ["no substantive clause to assess"], {"clause": None, "applied": True})
+        if substantive.sum() < 2:
+            # One clause *is* the whole text, which WholeTextNovelty already scores. Clause-vs-
+            # comment similarity is unreliable for a lone short clause (a concise new idea
+            # shares its topic words with longer comments), so stay neutral in the min().
+            return SignalResult(1.0, [], {"clause": None, "applied": False})
         on_topic = substantive & (a.clause_margins > 0)
         # With no on-topic clause, fall back to all substantive ones: novelty stays a pure
         # "is it new" measure and the relevance gate is what zeroes off-topic content.
@@ -86,4 +91,4 @@ class ClauseCoverage(Signal):
         reasons = []
         if len(eligible) > 1 and values[best] < 0.5:
             reasons.append("every on-topic clause is already covered by existing submissions")
-        return SignalResult(values[best], reasons, {"clause": clause})
+        return SignalResult(values[best], reasons, {"clause": clause, "applied": True})

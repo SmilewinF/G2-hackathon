@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "fastembed>=0.4",
+    "pyspellchecker>=0.8",
 ]
 
 [project.optional-dependencies]

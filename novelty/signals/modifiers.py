@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..index import ARTICLE_ID, Analysis, ReferenceIndex
 from ..models import Stance
-from ..text import containment, distinct_share, words
+from ..text import STOPWORDS, containment, distinct_share, tokens, words
 from .base import Kind, Signal, SignalResult
 
 
@@ -44,12 +44,52 @@ class ContentQuality(Signal):
         self.min_distinct_share = min_distinct_share
 
     def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
-        flags = []
-        if not any(a.substantive):
+        flags, notes = [], []
+        if a.foreign and all(a.foreign):
+            flags.append("text is not in a supported language (English), so it cannot be assessed")
+        elif not any(a.substantive) and any(a.foreign):
+            flags.append(f"no assessable English content ({sum(a.foreign)} of {len(a.foreign)} clauses are not in English)")
+        elif not any(a.substantive):
             flags.append("no substantive content (no sentence-like clause in the body)")
+        elif any(a.foreign):
+            notes.append(f"{sum(a.foreign)} of {len(a.foreign)} clauses are not in English and were not scored")
         if len(words(a.submission.body)) >= 12 and distinct_share(a.submission.body) < self.min_distinct_share:
             flags.append("repetitive text")
-        return SignalResult(0.0 if flags else 1.0, flags, {"flags": flags})
+        return SignalResult(0.0 if flags else 1.0, flags + notes, {"flags": flags})
+
+
+# Words that evaluate or refer to the proposal without saying anything specific about it.
+GENERIC_WORDS = frozenset(
+    """love like liked great good bad nice awesome terrible horrible amazing wonderful excellent
+    fantastic awful best worst fine happy glad sad agree disagree support oppose hate idea plan
+    project proposal decision thing stuff way think thought feel opinion really totally definitely
+    yes yeah wow thanks thank please sure just well much""".split()
+)
+
+
+class Specificity(Signal):
+    """Discount text that makes no concrete point ("I love this park idea!").
+
+    Very short texts sit far from everything in embedding space, so generic praise looks
+    "novel". Counting specific content words (not function words, not evaluative words) gives a
+    length-independent measure of whether there is a point to be novel about. Below
+    ``min_specific`` distinct specific words the reward scales down quadratically; a single
+    concrete idea ("Put EV chargers at the outer shuttle lot") easily clears it.
+    """
+
+    name = "specificity"
+    kind = Kind.MODIFIER
+
+    def __init__(self, min_specific: int = 4) -> None:
+        self.min_specific = min_specific
+
+    def evaluate(self, a: Analysis, index: ReferenceIndex) -> SignalResult:
+        english = [c for c, f in zip(a.clauses, a.foreign) if not f]
+        text = " ".join([a.prepared.headline, *english])
+        specific = {t for t in tokens(text) if t not in GENERIC_WORDS and t not in STOPWORDS}
+        value = min(1.0, len(specific) / self.min_specific) ** 2
+        reasons = [] if value == 1.0 else [f"only {len(specific)} specific content word(s): generic comment discounted"]
+        return SignalResult(value, reasons, {"specific_words": sorted(specific)})
 
 
 class StanceRarity(Signal):

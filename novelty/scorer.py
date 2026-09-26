@@ -7,7 +7,8 @@ Default signals (see ``novelty/signals``):
     novelty    whole_text       hybrid-similarity distance to nearest neighbours
                clause_coverage  most novel relevant, substantive clause (kitchen-sink / padding defence)
     modifier   duplicate        near-copy of a submission or of the article → 0
-               quality          keyword lists, repetition, no sentence-like content → 0
+               quality          keyword lists, repetition, unsupported language → 0
+               specificity      generic comments with no concrete point → scaled down
                stance           rarer stance, up to +10 %
     relevance  relevance        contrastive topic margin of the substantive body → smooth gate
 
@@ -26,6 +27,7 @@ import numpy as np
 
 from .embeddings import Embedder
 from .index import ReferenceIndex
+from .preparation import EnglishPreparer, TextPreparer
 from .models import FixedContent, Neighbor, ScoreBreakdown, Submission
 from .signals import (
     ClauseCoverage,
@@ -34,6 +36,7 @@ from .signals import (
     Kind,
     Signal,
     SignalResult,
+    Specificity,
     StanceRarity,
     TopicMargin,
     WholeTextNovelty,
@@ -49,6 +52,7 @@ class ScorerConfig:
     relevance_floor: float = 0.1  # calibrated relevance at/below which reward is 0
     relevance_full: float = 0.5  # calibrated relevance at/above which the gate is fully open
     duplicate_containment: float = 0.6  # shingle containment at which text counts as a copy
+    min_specific_words: int = 4  # distinct specific content words needed for full reward
 
 
 def default_signals(config: ScorerConfig) -> list[Signal]:
@@ -57,6 +61,7 @@ def default_signals(config: ScorerConfig) -> list[Signal]:
         ClauseCoverage(),
         DuplicateCheck(threshold=config.duplicate_containment),
         ContentQuality(),
+        Specificity(min_specific=config.min_specific_words),
         StanceRarity(weight=config.stance_weight),
         TopicMargin(floor=config.relevance_floor, full=config.relevance_full),
     ]
@@ -71,6 +76,7 @@ class NoveltyScorer:
         off_topic_anchors: Sequence[str],
         config: ScorerConfig = ScorerConfig(),
         signals: Sequence[Signal] | None = None,
+        preparer: TextPreparer | None = None,
     ) -> None:
         self.fixed = fixed
         self.embedder = embedder
@@ -81,7 +87,10 @@ class NoveltyScorer:
             raise ValueError(f"signal names must be unique: {names}")
         if not any(s.kind is Kind.NOVELTY for s in self.signals):
             raise ValueError("at least one NOVELTY signal is required")
-        self.index = ReferenceIndex(fixed, embedder, off_topic_anchors, config.dense_weight)
+        # Article + seed corpus vocabulary: spelling correction prefers these words and never
+        # "fixes" them (proper nouns, domain terms).
+        preparer = preparer or EnglishPreparer([fixed.embedding_text, *(s.text for s in corpus)])
+        self.index = ReferenceIndex(fixed, embedder, off_topic_anchors, config.dense_weight, preparer)
         seeded = [sub if sub.id else dataclasses.replace(sub, id=f"c{i + 1:02d}") for i, sub in enumerate(corpus)]
         self._add(seeded, on_topic=True)
 
@@ -152,7 +161,8 @@ class NoveltyScorer:
             score=round(novelty * gate, 4),
             novelty=round(novelty, 4),
             semantic_novelty=round(get("whole_text"), 4),
-            clause_novelty=round(get("clause_coverage", default=1.0), 4),
+            clause_novelty=(round(get("clause_coverage"), 4)
+                            if get("clause_coverage", "applied", False) else None),
             raw_novelty=round(get("whole_text", "raw"), 4),
             stance_rarity=round(get("stance", "rarity"), 4),
             relevance=round(get("relevance", "relevance", 1.0), 4),

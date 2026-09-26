@@ -137,7 +137,7 @@ $('reset').addEventListener('click', async () => {
 
 function render(r, committed) {
   const pct = (x) => `${Math.round(x * 100)}%`;
-  const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v)}</td></tr>`;
+  const row = (name, v) => `<tr><td>${name}</td><td>${typeof v === 'number' ? v.toFixed(3) : esc(v ?? '—')}</td></tr>`;
   const nearest = r.nearest.map(n => `<li>${esc(n.id)} (${n.similarity.toFixed(2)}): ${esc(corpus[n.id] || '')}</li>`).join('');
   $('result').hidden = false;
   $('result').innerHTML = `

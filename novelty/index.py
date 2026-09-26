@@ -15,9 +15,11 @@ import numpy as np
 from .embeddings import Embedder
 from .lexical import TfidfIndex
 from .models import FixedContent, Submission
-from .text import clauses, is_substantive, shingles
+from .preparation import EnglishPreparer, PreparedText, TextPreparer
+from .text import shingles, tokens
 
 ARTICLE_ID = "article"
+FULL_LEXICAL_TOKENS = 6  # content tokens at which TF-IDF evidence gets its full hybrid weight (swept: 4-10)
 
 
 def unit(v: np.ndarray) -> np.ndarray:
@@ -27,7 +29,7 @@ def unit(v: np.ndarray) -> np.ndarray:
 @dataclass(frozen=True)
 class Entry:
     id: str
-    text: str
+    text: str  # prepared analysis text (normalised, spell-corrected, English only), not the display text
     submission: Submission | None  # None for the fixed content
     on_topic: bool  # contributes to the topic centroid
     shingles: frozenset[str]
@@ -44,12 +46,14 @@ class Analysis:
     """Everything the signals need about one incoming submission, computed once."""
 
     submission: Submission
-    text: str
+    prepared: PreparedText
+    text: str  # prepared text
     vec: np.ndarray  # dense, whole text
     sims: np.ndarray  # hybrid similarity to every entry
     content_vec: np.ndarray | None  # dense, substantive body clauses only (None if there are none)
     clauses: tuple[str, ...]
     substantive: tuple[bool, ...]
+    foreign: tuple[bool, ...]
     clause_sims: np.ndarray  # (n_clauses, n_entries) hybrid similarity
     clause_margins: np.ndarray  # topic margin per clause
     shingles: frozenset[str]
@@ -67,12 +71,14 @@ class ReferenceIndex:
         embedder: Embedder,
         off_topic_anchors: Sequence[str],
         dense_weight: float,
+        preparer: TextPreparer | None = None,
     ) -> None:
         if not off_topic_anchors:
             raise ValueError("at least one off-topic anchor is required to calibrate relevance")
         self.fixed = fixed
         self.embedder = embedder
         self.dense_weight = dense_weight
+        self.preparer = preparer or EnglishPreparer([fixed.embedding_text])
         # Direction of "generic comment chatter" for this model. Subtracting similarity to it
         # cancels the genre/format similarity every comment shares with every other comment.
         self.generic_vec = unit(embedder.embed(list(off_topic_anchors)).mean(axis=0))
@@ -83,11 +89,8 @@ class ReferenceIndex:
         self._content = np.zeros_like(self._dense)
         self._clause_vecs: list[np.ndarray] = []
 
-        fixed_clauses = tuple(clauses(fixed.text))
-        self._append(
-            [Entry(ARTICLE_ID, fixed.embedding_text, None, True, shingles(fixed.embedding_text),
-                   fixed_clauses, tuple(is_substantive(c) for c in fixed_clauses))]
-        )
+        prep = self.preparer.prepare(fixed.title, fixed.text)
+        self._append([Entry(ARTICLE_ID, prep.analysis_text, None, True, shingles(prep.text), prep.clauses, prep.substantive)])
 
     # ------------------------------------------------------------------ writing
 
@@ -98,9 +101,8 @@ class ReferenceIndex:
                 raise ValueError("submissions added to the index need an id")
             if any(e.id == sub.id for e in self.entries):
                 raise ValueError(f"duplicate submission id {sub.id!r}")
-            cl = tuple(clauses(sub.body))
-            entries.append(Entry(sub.id, sub.text, sub, on_topic, shingles(sub.text), cl,
-                                 tuple(is_substantive(c) for c in cl)))
+            prep = self.preparer.prepare(sub.headline, sub.body)
+            entries.append(Entry(sub.id, prep.analysis_text, sub, on_topic, shingles(prep.text), prep.clauses, prep.substantive))
         self._append(entries)
 
     def _append(self, entries: list[Entry]) -> None:
@@ -131,9 +133,11 @@ class ReferenceIndex:
     def submissions(self) -> list[Submission]:
         return [e.submission for e in self.entries if e.submission is not None]
 
-    def hybrid(self, dense: np.ndarray, lexical: np.ndarray) -> np.ndarray:
-        w = self.dense_weight
-        return w * dense + (1.0 - w) * lexical
+    def hybrid(self, dense: np.ndarray, lexical: np.ndarray, lexical_confidence: float = 1.0) -> np.ndarray:
+        """``lexical_confidence`` < 1 shifts weight to the dense term for very short queries,
+        where a single rare word would otherwise dominate the TF-IDF cosine."""
+        lw = (1.0 - self.dense_weight) * lexical_confidence
+        return (1.0 - lw) * dense + lw * lexical
 
     def pairwise(self) -> np.ndarray:
         return self.hybrid(self._dense @ self._dense.T, self._tfidf.pairwise())
@@ -156,10 +160,10 @@ class ReferenceIndex:
         return vecs @ unit(topic) - vecs @ self.generic_vec
 
     def analyze(self, sub: Submission) -> Analysis:
-        cl = tuple(clauses(sub.body))
-        subst = tuple(is_substantive(c) for c in cl)
+        prep = self.preparer.prepare(sub.headline, sub.body)
+        cl, subst, text = prep.clauses, prep.substantive, prep.analysis_text
         content = _content_text(cl, subst)
-        batch = [sub.text, *( [content] if content else [] ), *cl]
+        batch = [text, *([content] if content else []), *cl]
         vecs = self.embedder.embed(batch)
         vec = vecs[0]
         content_vec = vecs[1] if content else None
@@ -167,13 +171,16 @@ class ReferenceIndex:
         clause_sims = self.hybrid(clause_vecs @ self._dense.T, self._tfidf.similarities_many(cl))
         return Analysis(
             submission=sub,
-            text=sub.text,
+            prepared=prep,
+            text=text,
             vec=vec,
-            sims=self.hybrid(self._dense @ vec, self._tfidf.similarities(sub.text)),
+            sims=self.hybrid(self._dense @ vec, self._tfidf.similarities(text),
+                             min(1.0, len(tokens(text)) / FULL_LEXICAL_TOKENS)),
             content_vec=content_vec,
             clauses=cl,
             substantive=subst,
+            foreign=prep.foreign,
             clause_sims=clause_sims,
             clause_margins=self.margin(clause_vecs, self.topic_sum()) if len(cl) else np.zeros(0),
-            shingles=shingles(sub.text),
+            shingles=shingles(prep.text),
         )
