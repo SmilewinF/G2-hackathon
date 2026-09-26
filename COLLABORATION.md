@@ -15,6 +15,8 @@ I built this with **Claude Code** (Claude Opus 5.5). My role was to set the requ
 | 7 | Run the tests against the whole corpus, including submissions added through the web UI | The suite uses the seed plus admitted submissions by default. A probe that was already submitted is asserted as a copy, or skipped with the id of the submission covering it. |
 | 8 | Clean up the code without removing any functionality | 60 changes, each checked by an independent reviewer. The scores, signals and reasons for 29 test inputs were byte-identical before and after. The review also surfaced two real bugs: the package build left out the signals module, and a caller's embedder was silently replaced. |
 | 9 | A clean, professional, responsive frontend with two examples per stance | The essential result up front, with the full breakdown in a collapsed section. The examples are verified against the scorer, and a test keeps them honest. Choosing the examples exposed a relevance gap: an off-topic hiking comment scores 0.21 instead of 0. |
+| 10 | Evaluate the project against the brief as a lead AI engineer, out of 100 | An independent five-lens panel plus a lead judge scored it 63/100. The main finding: same-town off-topic comments ("Route 7 bus cuts", "Library hours") scored 0.91, so the must-show relevance property failed on realistic input. The tests passed only because their off-topic probes were easy. |
+| 11 | Implement the panel's top two fixes: article-specific relevance, and a held-out evaluation set | 200 evaluation items and 72 relevance negatives written by independent authors and blind-checked, split into dev and test. Relevance variants compared on dev only: a nearest-neighbour contrast blocked off-topic text but punished novelty, so it was rejected. A shrinkage discriminant was stable under resampling. On the untouched test split, off-topic blocking went from 33% to 91% (topics absent from training: 50% to 100%), at a cost of 11 points of new-idea reward. The work also surfaced a nondeterminism bug in spelling correction, which is now fixed and tested. |
 
 ## How I checked the work
 
@@ -29,6 +31,7 @@ I built this with **Claude Code** (Claude Opus 5.5). My role was to set the requ
 
 ## Open items
 
-- The thresholds (relevance gate 0.1 / 0.5, 0.6 hybrid weight, 6-token lexical threshold, 4-word specificity minimum) were tuned on this corpus and haven't been verified on Gemini embeddings.
-- Nature and outdoor text near the "park" topic can partly pass the relevance gate: the hiking comment above scored 0.21.
+- The thresholds (0.6 hybrid weight, 6-token lexical threshold, 4-word specificity minimum, relevance shrinkage 0.9 and band 0.25) were tuned on this corpus and haven't been verified on Gemini embeddings.
+- Low-overlap paraphrases still score as new; that is the largest remaining quality gap (see the README's held-out evaluation).
+- The evaluation labels are machine-verified (authors and annotators are the same model family), not human-verified.
 - The pipeline is English-only; see the README's limitations section.
