@@ -18,7 +18,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["novelty"]
+packages = ["novelty", "novelty.signals"]
 
 [tool.setuptools.package-data]
 novelty = ["static/*"]
