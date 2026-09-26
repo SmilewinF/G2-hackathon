@@ -134,6 +134,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            # Never reuse a stale page or response: an old copy of the page calling a newer API
+            # broke with "Cannot convert undefined or null to object".
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
