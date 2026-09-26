@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..errors import CalibrationError
 from ..index import Analysis, ReferenceIndex
 from .base import Kind, RobustScale, Signal, SignalResult
 
@@ -43,7 +44,7 @@ class WholeTextNovelty(Signal):
 
     def fit(self, index: ReferenceIndex) -> None:
         if len(index.submission_indices) <= self.k:
-            raise ValueError(f"corpus needs more than k={self.k} submissions")
+            raise CalibrationError(f"corpus needs more than k={self.k} submissions to calibrate novelty")
         self._topk = np.full((len(index), self.k), -np.inf)
         for i in range(len(index)):
             row = index.entry_sims(i)

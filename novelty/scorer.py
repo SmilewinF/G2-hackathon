@@ -15,19 +15,27 @@ Default signals (see ``novelty/signals``):
 Every signal self-calibrates against the corpus (no hard-coded cosine thresholds), so behaviour
 carries across embedding backends. ``submit`` only admits relevant, non-duplicate, substantive
 submissions into the reference corpus, so spam and copy floods cannot shift the calibration.
+
+Logging (logger ``novelty.scorer``): every ``score``/``submit`` writes two INFO lines, the input
+and the result with its calculation and timing; DEBUG adds every signal, the nearest
+neighbours and the text-preparation corrections.
 """
 
 from __future__ import annotations
 
 import copy
 import dataclasses
+import logging
+import time
 from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
 
 from .embeddings import Embedder
-from .index import ReferenceIndex
+from .errors import NoveltyError, ScoringError, ValidationError
+from .index import Analysis, ReferenceIndex
+from .logging_setup import preview
 from .preparation import EnglishPreparer, TextPreparer
 from .models import FixedContent, Neighbor, ScoreBreakdown, Submission
 from .signals import (
@@ -42,6 +50,8 @@ from .signals import (
     TopicMargin,
     WholeTextNovelty,
 )
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,21 +89,23 @@ class NoveltyScorer:
         signals: Sequence[Signal] | None = None,
         preparer: TextPreparer | None = None,
     ) -> None:
+        start = time.perf_counter()
         self.fixed = fixed
         self.embedder = embedder
         self.config = config
         self.signals = list(signals) if signals is not None else default_signals(config)
         names = [s.name for s in self.signals]
         if len(set(names)) != len(names):
-            raise ValueError(f"signal names must be unique: {names}")
+            raise ValidationError(f"signal names must be unique: {names}")
         if not any(s.kind is Kind.NOVELTY for s in self.signals):
-            raise ValueError("at least one NOVELTY signal is required")
+            raise ValidationError("at least one NOVELTY signal is required")
         # Article + seed corpus vocabulary: spelling correction prefers these words and never
         # "fixes" them (proper nouns, domain terms).
         preparer = preparer or EnglishPreparer([fixed.embedding_text, *(s.text for s in corpus)])
         self.index = ReferenceIndex(fixed, embedder, off_topic_anchors, config.dense_weight, preparer)
         seeded = [sub if sub.id else dataclasses.replace(sub, id=f"c{i + 1:02d}") for i, sub in enumerate(corpus)]
         self._add(seeded, on_topic=True)
+        self._log_ready(time.perf_counter() - start)
 
     # ------------------------------------------------------------------ corpus management
 
@@ -125,7 +137,19 @@ class NoveltyScorer:
     def _add(self, subs: list[Submission], on_topic: bool) -> None:
         added = self.index.add(subs, on_topic=on_topic)
         for s in self.signals:
-            s.update(self.index, added)
+            try:
+                s.update(self.index, added)
+            except NoveltyError:
+                raise
+            except Exception:
+                # An incremental update is an optimisation; a full fit gives the same state.
+                log.exception("signal %r failed to update incrementally; recalibrating from scratch", s.name)
+                try:
+                    s.fit(self.index)
+                except Exception as e:
+                    raise ScoringError(f"signal {s.name!r} could not recalibrate after adding "
+                                       f"{len(subs)} submission(s): {e}") from e
+        log.debug("added %d submission(s); corpus now %d", len(added), len(self.corpus))
 
     def admission(self, result: ScoreBreakdown) -> tuple[bool, str]:
         """Only content that could ever earn a reward becomes reference data."""
@@ -139,20 +163,47 @@ class NoveltyScorer:
 
     def submit(self, sub: Submission) -> ScoreBreakdown:
         """Score against everything seen so far; add it to the corpus if the admission policy allows."""
-        result = self.score(sub)
+        start, stats = time.perf_counter(), self._embed_stats()
+        self._log_input("submit", sub)
+        result = self._score(sub)
         admitted, reason = self.admission(result)
         if admitted:
             if sub.id is None:
-                sub = dataclasses.replace(sub, id=f"s{len(self.index) :03d}")
+                sub = dataclasses.replace(sub, id=self._free_id("s"))
             self.add(sub)
-        return dataclasses.replace(result, admitted=admitted, reasons=[*result.reasons, reason])
+        result = dataclasses.replace(result, admitted=admitted, reasons=[*result.reasons, reason])
+        self._log_result("submit", sub, result, start, stats, reason)
+        return result
+
+    def _free_id(self, prefix: str) -> str:
+        n = len(self.index)
+        while self.index.get(f"{prefix}{n:03d}") is not None:
+            n += 1
+        return f"{prefix}{n:03d}"
 
     # ------------------------------------------------------------------ scoring
 
     def score(self, sub: Submission) -> ScoreBreakdown:
+        start, stats = time.perf_counter(), self._embed_stats()
+        self._log_input("score", sub)
+        result = self._score(sub)
+        self._log_result("score", sub, result, start, stats)
+        return result
+
+    def _score(self, sub: Submission) -> ScoreBreakdown:
         analysis = self.index.analyze(sub)
-        results = {s.name: s.evaluate(analysis, self.index) for s in self.signals}
-        return self._combine(results, analysis.sims)
+        results = {}
+        for s in self.signals:
+            try:
+                results[s.name] = s.evaluate(analysis, self.index)
+            except NoveltyError:
+                raise
+            except Exception as e:
+                raise ScoringError(f"signal {s.name!r} failed: {e}") from e
+        result = self._combine(results, analysis.sims)
+        if log.isEnabledFor(logging.DEBUG):
+            self._log_calculation(result, analysis)
+        return result
 
     def _combine(self, results: dict[str, SignalResult], sims: np.ndarray) -> ScoreBreakdown:
         by_kind = {k: [(s.name, results[s.name]) for s in self.signals if s.kind is k] for k in Kind}
@@ -189,6 +240,60 @@ class NoveltyScorer:
             signals={name: round(r.value, 4) for name, r in results.items()},
             detail={name: r.detail for name, r in results.items()},
         )
+
+    # ------------------------------------------------------------------ logging
+
+    def _embed_stats(self) -> tuple[int, float] | None:
+        misses, seconds = getattr(self.embedder, "misses", None), getattr(self.embedder, "embed_seconds", None)
+        return None if misses is None or seconds is None else (misses, seconds)
+
+    def _log_ready(self, seconds: float) -> None:
+        if not log.isEnabledFor(logging.INFO):
+            return
+        parts = [f"{len(self.corpus)} submissions", f"embedder {self.embedder.name}"]
+        whole, rel = next((s for s in self.signals if s.name == "whole_text"), None), \
+            next((s for s in self.signals if s.name == "relevance"), None)
+        if whole is not None and hasattr(whole, "scale"):
+            parts.append(f"novelty median {whole.scale.median:.3f} (scale {whole.scale.scale:.3f})")
+        if rel is not None and hasattr(rel, "on_topic_margin"):
+            parts.append(f"typical relevance margin {rel.on_topic_margin:+.3f}")
+        log.info("scorer ready: %s in %.0f ms", ", ".join(parts), seconds * 1000)
+
+    @staticmethod
+    def _log_input(action: str, sub: Submission) -> None:
+        log.info('%s input: id=%s stance=%s words=%d headline="%s"', action, sub.id or "-",
+                 sub.stance.value, len(sub.body.split()), preview(sub.headline))
+        log.debug('%s body: "%s"', action, sub.body)
+
+    def _log_result(self, action: str, sub: Submission, r: ScoreBreakdown, start: float,
+                    stats: tuple[int, float] | None, admission: str | None = None) -> None:
+        if not log.isEnabledFor(logging.INFO):
+            return
+        total_ms = (time.perf_counter() - start) * 1000
+        clause = "-" if r.clause_novelty is None else f"{r.clause_novelty:.2f}"
+        margin = "-" if r.relevance_margin is None else f"{r.relevance_margin:+.3f}"
+        parts = [f"score={r.score:.3f} = novelty {r.novelty:.3f} x gate {r.relevance_gate:.2f}",
+                 f"whole {r.semantic_novelty:.2f} clause {clause}",
+                 f"relevance {r.relevance:.2f} margin {margin}"]
+        if admission is not None:
+            parts.append(admission)
+        timing = f"{total_ms:.0f} ms"
+        now = self._embed_stats()
+        if stats is not None and now is not None:
+            timing += f" (embed {(now[1] - stats[1]) * 1000:.0f} ms, {now[0] - stats[0]} new)"
+        parts.append(timing)
+        flags = [x for x in r.reasons if not x.startswith("novelty z=") and x != admission]
+        if flags:
+            parts.append("flags: " + preview("; ".join(flags), 160))
+        log.info("%s result: id=%s %s", action, sub.id or "-", " | ".join(parts))
+
+    def _log_calculation(self, r: ScoreBreakdown, a: Analysis) -> None:
+        signals = " ".join(f"{name}={value:.3f}" for name, value in r.signals.items())
+        nearest = " ".join(f"{n.id}:{n.similarity:.2f}" for n in r.nearest)
+        prep = a.prepared
+        fixes = ", ".join(f"{old}->{new or '(removed)'}" for old, new in prep.corrections) or "none"
+        log.debug("calculation: %s | nearest %s | clauses %d (substantive %d, foreign %d) | corrections: %s",
+                  signals, nearest, len(prep.clauses), sum(prep.substantive), sum(prep.foreign), preview(fixes, 120))
 
     # ------------------------------------------------------------------ inspection
 

@@ -1,7 +1,8 @@
 from .base import Kind, RobustScale, Signal, SignalResult, normal_cdf, smoothstep
 from .modifiers import ContentQuality, DuplicateCheck, Specificity, StanceRarity
 from .novelty import ClauseCoverage, WholeTextNovelty
-from .relevance import CalibrationError, TopicMargin
+from ..errors import CalibrationError
+from .relevance import TopicMargin
 
 __all__ = [
     "CalibrationError",

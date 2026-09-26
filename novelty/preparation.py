@@ -18,12 +18,15 @@ language or domain plugs in by implementing ``TextPreparer``.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable, Protocol
 
 from .text import STOPWORDS, clauses, is_substantive, words
+
+log = logging.getLogger(__name__)
 
 SLANG = {
     "u": "you", "ur": "your", "r": "are", "ppl": "people", "pls": "please", "plz": "please",
@@ -84,11 +87,16 @@ def looks_foreign(text: str) -> bool:
 
 @lru_cache(maxsize=1)
 def _spellchecker():
-    from spellchecker import SpellChecker
+    """Single-edit corrections only: most typos are one edit away, and an unknown word with no
+    close match is more often a real term ("bioswales") than a typo. Also 100x faster.
+    Returns None (spelling correction disabled, everything else still works) if unavailable."""
+    try:
+        from spellchecker import SpellChecker
 
-    # Single-edit corrections only: most typos are one edit away, and an unknown word with no
-    # close match is more often a real term ("bioswales") than a typo. Also 100x faster.
-    return SpellChecker(distance=1)
+        return SpellChecker(distance=1)
+    except Exception as e:  # missing package or unreadable dictionary
+        log.warning("spelling correction disabled: pyspellchecker unavailable (%s)", e)
+        return None
 
 
 class EnglishPreparer:
@@ -103,7 +111,7 @@ class EnglishPreparer:
         lower = word.lower()
         if lower in SLANG:
             return SLANG[lower]
-        if len(lower) < 3 or lower in self.domain or not self._sp.unknown([lower]):
+        if self._sp is None or len(lower) < 3 or lower in self.domain or not self._sp.unknown([lower]):
             return word
         if lower in self._cache:
             return self._cache[lower]

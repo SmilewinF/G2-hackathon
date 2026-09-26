@@ -12,6 +12,7 @@ the one event after which previously computed lexical similarities are stale.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from typing import Sequence
@@ -19,10 +20,13 @@ from typing import Sequence
 import numpy as np
 
 from .embeddings import Embedder
+from .errors import CalibrationError, ValidationError
 from .lexical import SparseVec, SparseVectors, TfidfModel, count
 from .models import FixedContent, Submission
 from .preparation import EnglishPreparer, PreparedText, TextPreparer
 from .text import shingles
+
+log = logging.getLogger(__name__)
 
 ARTICLE_ID = "article"
 FULL_LEXICAL_TOKENS = 6  # content tokens at which TF-IDF evidence gets its full hybrid weight (swept: 4-10)
@@ -103,7 +107,7 @@ class ReferenceIndex:
         refit_growth: float = 0.1,
     ) -> None:
         if not off_topic_anchors:
-            raise ValueError("at least one off-topic anchor is required to calibrate relevance")
+            raise CalibrationError("at least one off-topic anchor is required to calibrate relevance")
         self.fixed = fixed
         self.embedder = embedder
         self.dense_weight = dense_weight
@@ -138,9 +142,9 @@ class ReferenceIndex:
         batch_ids: set[str] = set()
         for sub in subs:
             if sub.id is None:
-                raise ValueError("submissions added to the index need an id")
+                raise ValidationError("submissions added to the index need an id")
             if sub.id in self._by_id or sub.id in batch_ids:
-                raise ValueError(f"duplicate submission id {sub.id!r}")
+                raise ValidationError(f"duplicate submission id {sub.id!r}")
             batch_ids.add(sub.id)
         start = len(self.entries)
         self._append([(sub.id, sub, self.preparer.prepare(sub.headline, sub.body), on_topic) for sub in subs])
@@ -177,6 +181,7 @@ class ReferenceIndex:
 
         if self.tfidf.needs_refit:
             self.tfidf.refit()
+            log.debug("TF-IDF refit at %d entries (version %d)", len(self.entries), self.tfidf.version)
             self._doc_sparse, self._clause_sparse = SparseVectors(), SparseVectors()
             self._doc_sparse.extend(self.tfidf.vector(d) for d in self._doc_counts)
             self._clause_sparse.extend(self.tfidf.vector(c) for c in self._clause_counts)

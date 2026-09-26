@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..errors import CalibrationError
 from ..index import Analysis, ReferenceIndex, unit
 from .base import Kind, Signal, SignalResult, smoothstep
-
-
-class CalibrationError(ValueError):
-    """The reference data cannot support a meaningful calibration."""
 
 
 class TopicMargin(Signal):
